@@ -86,6 +86,15 @@ body{font-family:'Inter',sans-serif;background:#f0f2f5;color:#1a1a2e;min-height:
   .kc{min-width:80px;padding:10px 8px}
   .kc-num{font-size:16px}
 }
+
+/* Insurer names are real source entries; never hide them behind an all-insurer claim. */
+.ins-chips{display:flex;flex-wrap:wrap;gap:5px;margin:5px 0 2px}
+.ins-chip{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:5px;padding:3px 6px;font-size:10px;line-height:1.35;color:#334155;max-width:100%;overflow-wrap:anywhere}
+.ins-chip.ins-match{background:#dbeafe;border-color:#93c5fd;color:#1d4ed8;font-weight:700}
+.ins-more{margin-top:7px;font-size:10px;color:#1d4ed8}
+.ins-more summary{cursor:pointer;font-weight:700;user-select:none}
+.ins-more .ins-chips{padding:6px 0}
+.ins-empty{font-size:10px;color:#94a3b8}
 </style>
 </head>
 <body>
@@ -194,7 +203,6 @@ body{font-family:'Inter',sans-serif;background:#f0f2f5;color:#1a1a2e;min-height:
     <div class="frow">
       <span class="flbl">Filters:</span>
       <label class="ppn-lbl"><input type="checkbox" id="q-ppn" onchange="applyF()"> PPN Only</label>
-      <label class="ppn-lbl"><input type="checkbox" id="q-allins" onchange="applyF()"> 35+ Insurer Listings</label>
       <button class="btn-clr" onclick="clearF()">&#x2715; Reset</button>
     </div>
   </div>
@@ -268,11 +276,9 @@ function applyF(){
   var spec=document.getElementById('q-spec').value.toLowerCase();
   var ins=document.getElementById('q-ins').value.toLowerCase();
   var ppnOnly=document.getElementById('q-ppn').checked;
-  var allInsOnly=document.getElementById('q-allins').checked;
   filtered=DATA.filter(function(r){
     if(city&&r.city!==city)return false;
     if(ppnOnly){if(ins){if(!(r.ppn_insurers||[]).some(function(n){return n.toLowerCase()===ins;}))return false;}else if(!r.ppn)return false;}
-    if(allInsOnly&&r.ins_count<35)return false;
     if(spec&&r.spec.toLowerCase().indexOf(spec)===-1)return false;
     if(ins&&(r.ins||'').split(', ').every(function(n){return n.toLowerCase()!==ins;}))return false;
     if(q){
@@ -308,15 +314,26 @@ function render(){
       var sarr=r.spec.split(', ').filter(function(s){return s&&s.length>2;}).slice(0,4);
       sarr.forEach(function(s){specs+='<span class="sp">'+esc(s)+'</span>';});
     }
-    var insArr=r.ins?r.ins.split(', ').filter(function(i){return i.length>0;}):[]; 
+    var insArr=r.ins?r.ins.split(', ').map(function(i){return i.trim();}).filter(Boolean):[];
+    var selectedIns=document.getElementById('q-ins').value;
+    var selectedLower=selectedIns.toLowerCase();
+    // Show the insurer the user searched for FIRST. Show actual insurer names,
+    // not an unverified "35+" empanelment claim.
+    var matching=insArr.filter(function(i){return selectedIns&&i.toLowerCase()===selectedLower;});
+    var others=insArr.filter(function(i){return !selectedIns||i.toLowerCase()!==selectedLower;});
+    var ordered=matching.concat(others);
+    function insurerChip(i){
+      return '<span class="ins-chip'+(selectedIns&&i.toLowerCase()===selectedLower?' ins-match':'')+'">'+esc(i)+'</span>';
+    }
     var insTxt='';
-    var isAllIns=(r.ins_count>=35);
-    if(isAllIns){
-      insTxt='<div class="ins-all-badge">&#9733; 35+ insurer listings ('+r.ins_count+')</div>';
-    } else if(insArr.length){
-      var shown=insArr.slice(0,12).join(', ');
-      if(insArr.length>12)shown+=(' + '+(insArr.length-12)+' more');
-      insTxt='<div class="insval">'+esc(shown)+'</div>';
+    if(ordered.length){
+      insTxt='<div class="ins-chips">'+ordered.slice(0,8).map(insurerChip).join('')+'</div>';
+      if(ordered.length>8){
+        insTxt+='<details class="ins-more"><summary>Show all '+ordered.length+' insurers</summary>'+
+          '<div class="ins-chips">'+ordered.slice(8).map(insurerChip).join('')+'</div></details>';
+      }
+    }else{
+      insTxt='<span class="ins-empty">No insurer list provided by the source</span>';
     }
     var ph=(r.phone&&r.phone!=='nan'&&r.phone.length>3)?r.phone:'';
     var cardHtml='<div class="hcard'+(r.ppn?' ppn':'')+'">'+
@@ -325,7 +342,6 @@ function render(){
         '<div class="cbadges">'+
           (r.ppn?'<span class="badge ppn">&#10003; PPN</span>':'')+
           '<span class="badge city" style="background:'+col+'18;color:'+col+'">'+r.city+'</span>'+
-          (isAllIns?'<span class="badge all-ins">35+ Listed</span>':'')+
         '</div>'+
       '</div>'+
       '<div class="caddr">&#128205; '+esc(r.address)+'</div>'+
@@ -333,7 +349,7 @@ function render(){
       (r.pin&&r.pin!=='nan'&&r.pin.length>2?'<div class="cdet"><span class="cico">&#128206;</span>PIN '+esc(r.pin)+'</div>':'')+
       (r.rating>0?'<div class="cdet"><span class="cico">&#11088;</span>'+r.rating.toFixed(1)+' / 5.0</div>':'')+
       (specs?'<div class="spwrap">'+specs+'</div>':'')+
-      (insTxt?'<div class="inssec"><div class="inslbl">Accepted Insurers</div>'+insTxt+'</div>':'')+
+      (insTxt?'<div class="inssec"><div class="inslbl">Insurers listed by Medi Assist ('+insArr.length+')</div>'+insTxt+'</div>':'')+
     '</div>';
     html+=cardHtml;
   });
@@ -350,7 +366,6 @@ function chgPage(d){
 function clearF(){
   ['q-search','q-city','q-spec','q-ins'].forEach(function(id){document.getElementById(id).value='';});
   document.getElementById('q-ppn').checked=false;
-  document.getElementById('q-allins').checked=false;
   applyF();
 }
 
@@ -376,7 +391,13 @@ function dlCSV(){
 }
 
 function esc(v){
-  return String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  var s=String(v == null ? '' : v);
+  for(var k=0;k<3;k++){
+    var next=s.replace(/&amp;/gi,'&').replace(/&#0*38;/g,'&');
+    if(next===s)break;
+    s=next;
+  }
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 function syncFilterOptions(){
   var insurers=new Set(), specialties=new Set();
