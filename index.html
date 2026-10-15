@@ -111,7 +111,7 @@ body{font-family:'Inter',sans-serif;background:#f0f2f5;color:#1a1a2e;min-height:
   <div class="search-box">
     <div class="search-row">
       <input class="si" id="q-search" placeholder="Search hospital name, area or PIN..." oninput="applyF()">
-      <select class="ss" id="q-source" onchange="buildKPI();applyF()">
+      <select class="ss" id="q-source" onchange="syncCityOptions();buildKPI();applyF()">
         <option value="">Both Sources</option>
         <option value="Medi Assist">Medi Assist</option>
         <option value="ICICI Lombard">ICICI Lombard</option>
@@ -245,10 +245,13 @@ function buildKPI(){
   var selectedSource=document.getElementById('q-source').value;
   var kpiRows=selectedSource?DATA.filter(function(r){return r.source===selectedSource;}):DATA;
   kpiRows.forEach(function(r){
-    var st=r.state||'', c=r.city||'', k=st+'|'+c;
+    if(r.ppn)ppnTotal++;
+    var st=r.state||'', c=r.search_city||r.city||'';
+    if(!c)return; // Unknown cities must not appear as unlabeled top-city tiles.
+    var k=st+'|'+c;
     var entry=cnt.get(k)||{state:st,city:c,count:0,ppn:0};
     entry.count++;
-    if(r.ppn){entry.ppn++;ppnTotal++;}
+    if(r.ppn)entry.ppn++;
     cnt.set(k,entry);
   });
   KPI_CITIES=Array.from(cnt.values()).sort(function(a,b){return b.count-a.count;}).slice(0,12);
@@ -297,12 +300,12 @@ function applyF(){
   filtered=DATA.filter(function(r){
     if(source&&r.source!==source)return false;
     if(state&&r.state!==state)return false;
-    if(city&&r.city!==city)return false;
+    if(city&&(r.search_city||r.city)!==city)return false;
     if(ppnOnly){if(ins){if(!(r.ppn_insurers||[]).some(function(n){return n.toLowerCase()===ins;}))return false;}else if(!r.ppn)return false;}
     if(spec&&r.spec.toLowerCase().indexOf(spec)===-1)return false;
     if(ins&&(r.ins||'').split(', ').every(function(n){return n.toLowerCase()!==ins;}))return false;
     if(q){
-      var h=(r.name+' '+r.address+' '+(r.area||'')+' '+r.city+' '+r.state+' '+r.pin+' '+r.source+' '+(r.network_type||'')).toLowerCase();
+      var h=(r.name+' '+r.address+' '+(r.area||'')+' '+r.city+' '+(r.search_city||'')+' '+r.state+' '+r.pin+' '+r.source+' '+(r.network_type||'')).toLowerCase();
       if(h.indexOf(q)===-1)return false;
     }
     return true;
@@ -317,7 +320,7 @@ function render(){
   var pages=Math.max(1,Math.ceil(total/PS));
   var slice=filtered.slice((page-1)*PS,page*PS);
   var city=document.getElementById('q-city').value;
-  document.getElementById('res-cnt').textContent=total.toLocaleString()+' hospitals found';
+  document.getElementById('res-cnt').textContent=total.toLocaleString()+' hospitals found'+(city?' · IndusInd locations with missing/unverifiable city may be absent from city-filtered results':'');
   document.getElementById('res-title').textContent=city?city+' Hospitals':'All Hospitals';
   document.getElementById('pg-info').textContent='Page '+page+' of '+pages+' ('+total.toLocaleString()+' results)';
   document.getElementById('pg-prev').disabled=(page<=1);
@@ -363,7 +366,7 @@ function render(){
        '<span class="badge" style="background:#e0e7ff;color:#3730a3">'+esc(r.source||'Unknown source')+'</span>'+
        (r.source==='IndusInd General Insurance'&&r.network_type?'<span class="badge" style="background:#e0f2fe;color:#075985">'+esc(r.network_type)+'</span>':'')+
           (r.ppn?'<span class="badge ppn">&#10003; PPN</span>':'')+
-          '<span class="badge city" style="background:'+col+'18;color:'+col+'">'+esc(r.city)+', '+esc(r.state)+'</span>'+
+          '<span class="badge city" style="background:'+col+'18;color:'+col+'">'+esc(r.city||(r.search_city?r.search_city+' (PIN matched)':'City not provided'))+', '+esc(r.state||'State not provided')+'</span>'+
         '</div>'+
       '</div>'+
       '<div class="caddr">&#128205; '+esc(r.address)+'</div>'+
@@ -392,14 +395,14 @@ function clearF(){
 }
 
 function dlCSV(){
-  var hdr=['Source','Source ID','Name','Address','State','City','PIN','Phone','PPN','Rating','Ins_Count','Specialities','Insurers'];
+  var hdr=['Source','Source ID','Name','Address','State','Source City','Search City','City Search Evidence','PIN','Phone','PPN','Rating','Ins_Count','Specialities','Insurers'];
   var rows=filtered.map(function(r){
     return [
       '"'+(r.source||'').replace(/"/g,"''")+'"',
       '"'+String(r.reference_id||r.id||'').replace(/"/g,"''")+'"',
       '"'+r.name.replace(/"/g,"''")+'"',
       '"'+r.address.replace(/"/g,"''")+'"',
-      r.state,r.city,r.pin,r.phone,
+      r.state,r.city,r.search_city||'',r.city_search_evidence||'',r.pin,r.phone,
       r.ppn?'Yes':'No',
       r.rating,r.ins_count,
       '"'+r.spec+'"',
@@ -447,7 +450,8 @@ function syncLocationOptions(){
 function syncCityOptions(){
   var selectedState=document.getElementById('q-state').value;
   var citySelect=document.getElementById('q-city');
-  var cities=new Set(DATA.filter(function(r){return !selectedState||r.state===selectedState;}).map(function(r){return r.city||'';}).filter(Boolean));
+  var selectedSource=document.getElementById('q-source').value;
+  var cities=new Set(DATA.filter(function(r){return (!selectedState||r.state===selectedState)&&(!selectedSource||r.source===selectedSource);}).map(function(r){return r.search_city||r.city||'';}).filter(Boolean));
   citySelect.replaceChildren(new Option('All Cities',''));
   Array.from(cities).sort(function(a,b){return a.localeCompare(b);}).forEach(function(c){
     citySelect.add(new Option(c,c));
@@ -464,7 +468,7 @@ function onStateChange(){
 function networkiqCity(v){
   var s=String(v||'').trim().replace(/\s+/g,' ');
   var key=s.toLocaleLowerCase('en-IN');
-  var aliases={'gurugram':'Gurgaon','gurgaon':'Gurgaon',
+  var aliases={'gurugram':'Gurgaon','gurgaon':'Gurgaon','ncr-gurgaon':'Gurgaon','ncr gurgaon':'Gurgaon','ncr-gurugram':'Gurgaon','grugram':'Gurgaon',
                'bengaluru':'Bangalore','bangalore':'Bangalore',
                'belagavi':'Belgaum','belgaum':'Belgaum'};
   return aliases[key]||s.toLocaleLowerCase('en-IN').replace(/\b\S/g,function(c){return c.toLocaleUpperCase('en-IN');});
@@ -492,6 +496,47 @@ function networkiqRows(rows,source){
     return x;
   });
 }
+// NETWORKIQ_INDUSIND_PIN_CITY_FILTER_V2
+// City matching is a separate search aid, never a change to the source's city field.
+function networkiqPinCityIndex(rows){
+  var votes=new Map();
+  rows.forEach(function(r){
+    var state=networkiqState(r.state), city=networkiqCity(r.city);
+    var pin=String(r.pin||'').trim();
+    if(!state||!city||!/^[0-9]{6}$/.test(pin))return;
+    var key=state+'|'+pin, counts=votes.get(key)||new Map();
+    counts.set(city,(counts.get(city)||0)+1);
+    votes.set(key,counts);
+  });
+  var reliable=new Map();
+  votes.forEach(function(counts,key){
+    var total=0, max=0, winning='';
+    counts.forEach(function(n,city){
+      total+=n;
+      if(n>max){max=n;winning=city;}
+    });
+    // At least two independent hospital rows, 85% agreement; otherwise leave unknown.
+    if(max>=2&&max/total>=0.85)reliable.set(key,winning);
+  });
+  return reliable;
+}
+function networkiqApplyLocationEvidence(){
+  var pinCities=networkiqPinCityIndex(DATA);
+  var recovered=0;
+  DATA.forEach(function(r){
+    r.search_city=r.city||'';
+    r.city_search_evidence=r.city?'source_city':'unresolved';
+    if(r.source!=='IndusInd General Insurance'||r.city)return;
+    var city=pinCities.get(r.state+'|'+String(r.pin||'').trim());
+    if(city){
+      r.search_city=city;
+      r.city_search_evidence='corroborated_pin';
+      recovered++;
+    }
+  });
+  console.info('NetworkIQ: inferred search cities for '+recovered+' IndusInd rows using matching state+PIN from records with explicit cities. Original city fields unchanged.');
+}
+
 function networkiqDate(v){
   if(!v)return 'date unknown';
   var dt=new Date(v);
@@ -517,6 +562,7 @@ function loadCurrentNetwork(){
     if(!indus.metadata || indus.metadata.source_name!=='IndusInd General Insurance' || indus.metadata.verification_level!=='OFFICIAL_SEARCH_RESULT_ONLY' || !Array.isArray(indus.hospitals) || indus.hospitals.length!==indus.metadata.record_count || indus.hospitals.length!==15229)
       throw new Error('Missing or incomplete IndusInd nationwide snapshot');
     DATA=networkiqRows(medi.hospitals,'Medi Assist').concat(networkiqRows(icici.hospitals,'ICICI Lombard'),networkiqRows(indus.hospitals,'IndusInd General Insurance'));
+    networkiqApplyLocationEvidence();
     filtered=DATA.slice();
     syncFilterOptions();
     syncLocationOptions();
