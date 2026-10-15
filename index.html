@@ -106,18 +106,13 @@ body{font-family:'Inter',sans-serif;background:#f0f2f5;color:#1a1a2e;min-height:
   <div class="top-badge" id="total-badge">Loading...</div>
 </div>
 <div class="hero">
-  <div class="hero-title">Find <span>Empanelled Hospitals</span> Near You</div>
+  <div class="hero-title">Find <span>Source-Listed Hospitals</span> Across India</div>
   <div class="hero-sub" id="source-meta">Loading latest validated hospital snapshot...</div>
   <div class="search-box">
     <div class="search-row">
       <input class="si" id="q-search" placeholder="Search hospital name, area or PIN..." oninput="applyF()">
-      <select class="ss" id="q-city" onchange="applyF()">
-        <option value="">All Cities</option>
-        <option>Delhi</option><option>Faridabad</option><option>Gurgaon</option>
-        <option>Noida</option><option>Ghaziabad</option><option>Mumbai</option>
-        <option>Navi Mumbai</option><option>Pune</option><option>Hyderabad</option>
-        <option>Bangalore</option><option>Ahmedabad</option>
-      </select>
+      <select class="ss" id="q-state" onchange="onStateChange()"><option value="">All States</option></select>
+      <select class="ss" id="q-city" onchange="applyF()"><option value="">All Cities</option></select>
       <select class="ss" id="q-spec" onchange="applyF()">
         <option value="">All Specialities</option>
 <option value="Cardiac & Circulatory Disorder">Cardiac & Circulatory Disorder</option>
@@ -238,51 +233,66 @@ var CC={
   'Bangalore':'#6366f1','Ahmedabad':'#0ea5e9'
 };
 
+var KPI_CITIES=[];
 function buildKPI(){
-  var cities=['Delhi','Faridabad','Gurgaon','Noida','Ghaziabad','Mumbai','Navi Mumbai','Pune','Hyderabad','Bangalore','Ahmedabad'];
-  var cnt={};var ppn={};
+  var cnt=new Map(), ppnTotal=0;
   DATA.forEach(function(r){
-    cnt[r.city]=(cnt[r.city]||0)+1;
-    if(r.ppn)ppn[r.city]=(ppn[r.city]||0)+1;
+    var st=r.state||'', c=r.city||'', k=st+'|'+c;
+    var entry=cnt.get(k)||{state:st,city:c,count:0,ppn:0};
+    entry.count++;
+    if(r.ppn){entry.ppn++;ppnTotal++;}
+    cnt.set(k,entry);
   });
-  var totPPN=0;
-  Object.keys(ppn).forEach(function(k){totPPN+=ppn[k];});
-  var html='<div class="kc active" id="kc-All" onclick="fcity(this)"><div class="kc-name">All Cities</div><div class="kc-num">'+DATA.length.toLocaleString()+'</div><div class="kc-ppn">'+totPPN+' PPN</div></div>';
-  cities.forEach(function(c){
-    var col=CC[c]||'#3b82f6';
-    var cid=c.replace(/ /g,'_');
-    html+='<div class="kc" id="kc-'+cid+'" onclick="fcity(this)"><div class="kc-name" style="color:'+col+'">'+c+'</div><div class="kc-num">'+((cnt[c]||0).toLocaleString())+'</div><div class="kc-ppn">'+((ppn[c]||0))+' PPN</div></div>';
+  KPI_CITIES=Array.from(cnt.values()).sort(function(a,b){return b.count-a.count;}).slice(0,12);
+  var html='<div class="kc active" id="kc-All" onclick="fcity(this)"><div class="kc-name">All India</div><div class="kc-num">'+DATA.length.toLocaleString()+'</div><div class="kc-ppn">'+ppnTotal+' PPN</div></div>';
+  KPI_CITIES.forEach(function(item,i){
+    html+='<div class="kc" id="kc-'+i+'" onclick="fcity(this)"><div class="kc-name">'+esc(item.city)+'</div><div class="kc-num">'+item.count.toLocaleString()+'</div><div class="kc-ppn">'+esc(item.state)+' · '+item.ppn+' PPN</div></div>';
   });
   document.getElementById('kpi-strip').innerHTML=html;
   document.getElementById('total-badge').textContent=DATA.length.toLocaleString()+' Hospitals';
 }
 
+
 function setActive(city){
   document.querySelectorAll('.kc').forEach(function(el){el.classList.remove('active');});
-  var id='kc-'+(city&&city.length?city:'All').replace(/ /g,'_');
-  var el=document.getElementById(id);
+  var state=document.getElementById('q-state').value;
+  var index=KPI_CITIES.findIndex(function(x){return x.city===city && x.state===state;});
+  var el=document.getElementById(!city && !state?'kc-All':('kc-'+index));
   if(el)el.classList.add('active');
 }
 
 function fcity(el){
-  var c=el.id.replace('kc-','').replace(/_/g,' ');
-  document.getElementById('q-city').value=(c==='All'?'':c);
+  var id=el.id;
+  if(id==='kc-All'){
+    document.getElementById('q-state').value='';
+    syncCityOptions();
+    document.getElementById('q-city').value='';
+  }else{
+    var v=KPI_CITIES[Number(id.replace('kc-',''))];
+    if(!v)return;
+    document.getElementById('q-state').value=v.state;
+    syncCityOptions();
+    document.getElementById('q-city').value=v.city;
+  }
   applyF();
 }
+
 
 function applyF(){
   var q=document.getElementById('q-search').value.toLowerCase().trim();
   var city=document.getElementById('q-city').value;
+  var state=document.getElementById('q-state').value;
   var spec=document.getElementById('q-spec').value.toLowerCase();
   var ins=document.getElementById('q-ins').value.toLowerCase();
   var ppnOnly=document.getElementById('q-ppn').checked;
   filtered=DATA.filter(function(r){
+    if(state&&r.state!==state)return false;
     if(city&&r.city!==city)return false;
     if(ppnOnly){if(ins){if(!(r.ppn_insurers||[]).some(function(n){return n.toLowerCase()===ins;}))return false;}else if(!r.ppn)return false;}
     if(spec&&r.spec.toLowerCase().indexOf(spec)===-1)return false;
     if(ins&&(r.ins||'').split(', ').every(function(n){return n.toLowerCase()!==ins;}))return false;
     if(q){
-      var h=(r.name+' '+r.address+' '+r.city+' '+r.pin).toLowerCase();
+      var h=(r.name+' '+r.address+' '+r.city+' '+r.state+' '+r.pin).toLowerCase();
       if(h.indexOf(q)===-1)return false;
     }
     return true;
@@ -341,7 +351,7 @@ function render(){
         '<div class="cname">'+esc(r.name)+'</div>'+
         '<div class="cbadges">'+
           (r.ppn?'<span class="badge ppn">&#10003; PPN</span>':'')+
-          '<span class="badge city" style="background:'+col+'18;color:'+col+'">'+r.city+'</span>'+
+          '<span class="badge city" style="background:'+col+'18;color:'+col+'">'+esc(r.city)+', '+esc(r.state)+'</span>'+
         '</div>'+
       '</div>'+
       '<div class="caddr">&#128205; '+esc(r.address)+'</div>'+
@@ -364,18 +374,18 @@ function chgPage(d){
 }
 
 function clearF(){
-  ['q-search','q-city','q-spec','q-ins'].forEach(function(id){document.getElementById(id).value='';});
+  ['q-search','q-state','q-city','q-spec','q-ins'].forEach(function(id){document.getElementById(id).value='';});
   document.getElementById('q-ppn').checked=false;
   applyF();
 }
 
 function dlCSV(){
-  var hdr=['Name','Address','City','PIN','Phone','PPN','Rating','Ins_Count','Specialities','Insurers'];
+  var hdr=['Name','Address','State','City','PIN','Phone','PPN','Rating','Ins_Count','Specialities','Insurers'];
   var rows=filtered.map(function(r){
     return [
       '"'+r.name.replace(/"/g,"''")+'"',
       '"'+r.address.replace(/"/g,"''")+'"',
-      r.city,r.pin,r.phone,
+      r.state,r.city,r.pin,r.phone,
       r.ppn?'Yes':'No',
       r.rating,r.ins_count,
       '"'+r.spec+'"',
@@ -411,18 +421,42 @@ function syncFilterOptions(){
     Array.from(p[2]).sort(function(a,b){return a.localeCompare(b);}).forEach(function(x){el.add(new Option(x,x));});
   });
 }
+function syncLocationOptions(){
+  var stateSelect=document.getElementById('q-state');
+  var states=new Set(DATA.map(function(r){return r.state||'';}).filter(Boolean));
+  stateSelect.replaceChildren(new Option('All States',''));
+  Array.from(states).sort(function(a,b){return a.localeCompare(b);}).forEach(function(s){
+    stateSelect.add(new Option(s,s));
+  });
+  syncCityOptions();
+}
+function syncCityOptions(){
+  var selectedState=document.getElementById('q-state').value;
+  var citySelect=document.getElementById('q-city');
+  var cities=new Set(DATA.filter(function(r){return !selectedState||r.state===selectedState;}).map(function(r){return r.city||'';}).filter(Boolean));
+  citySelect.replaceChildren(new Option('All Cities',''));
+  Array.from(cities).sort(function(a,b){return a.localeCompare(b);}).forEach(function(c){
+    citySelect.add(new Option(c,c));
+  });
+}
+function onStateChange(){
+  syncCityOptions();
+  applyF();
+}
+
 function loadCurrentNetwork(){
   fetch('./data/hospitals.json',{cache:'no-store'})
     .then(function(res){if(!res.ok)throw new Error('HTTP '+res.status);return res.json();})
     .then(function(data){
-      if(!Array.isArray(data.hospitals) || data.hospitals.length<1000){throw new Error('Invalid or incomplete hospital dataset');}
+      if(!Array.isArray(data.hospitals) || data.hospitals.length<20000 || !data.metadata || data.metadata.scope!=='nationwide'){throw new Error('Invalid or incomplete hospital dataset');}
       DATA=data.hospitals;
       filtered=DATA.slice();
       syncFilterOptions();
+      syncLocationOptions();
       var m=data.metadata || {};
       var date=m.snapshot_retrieved_at_utc ? new Date(m.snapshot_retrieved_at_utc).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',dateStyle:'medium'}):'date unknown';
       var hero=document.getElementById('source-meta');
-      if(hero)hero.textContent='Search '+DATA.length.toLocaleString('en-IN')+' hospitals across 11 cities — Medi Assist API snapshot '+date+' · Please confirm cashless empanelment before admission';
+      if(hero)hero.textContent='Search '+DATA.length.toLocaleString('en-IN')+' nationwide hospitals — Medi Assist API snapshot '+date+' · Please confirm cashless empanelment before admission';
       buildKPI();applyF();
     })
     .catch(function(err){

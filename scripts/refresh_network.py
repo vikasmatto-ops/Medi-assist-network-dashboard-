@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Medi Assist 11-city snapshot builder. stdlib only, never edits a live website.
+"""Medi Assist nationwide API snapshot builder. stdlib only, never edits a live website.
 Run offline: python scripts/refresh_network.py --snapshot fullnetwork.json
 Run live:    python scripts/refresh_network.py --live
 Data source returns current API SNAPSHOT, not guaranteed empanelment verification.
@@ -16,16 +16,7 @@ import urllib.request
 from collections import Counter, defaultdict
 
 SOURCE_URL = 'https://api-eligibility.mediassist.in/network/hospitals'
-CITIES = ['Delhi', 'Faridabad', 'Gurgaon', 'Noida', 'Ghaziabad', 'Mumbai',
-          'Navi Mumbai', 'Pune', 'Hyderabad', 'Bangalore', 'Ahmedabad']
-OLD_CITY_COUNTS = dict(zip(CITIES,[809,235,311,216,207,756,1049,1355,1176,936,1320]))
-NAVI_PINS = {'400614','400701','400702','400703','400704','400705','400706','400707',
-             '400708','400709','400710','400711','410206','410208','410209','410210',
-             '410218','410221'}
-NAVI_TERMS = ('navi mumbai','vashi','nerul','sanpada','cbd belapur','belapur',
-              'kharghar','ghansoli','kopar khairane','koparkhairane','airoli',
-              'turbhe','rabale','panvel','kamothe','kalamboli','taloja',
-              'ulwe','seawoods','juinagar')
+
 
 
 def plain(v):
@@ -36,53 +27,7 @@ def key(v):
     return plain(v).casefold()
 
 
-def assign_city(h):
-    """Conservative operational/metro geography: never equate entire Thane with Navi Mumbai.
-    Returns dashboard city and a rule string, or None and a rejection reason.
-    """
-    st, ci, dist = map(key,(h.get('state'),h.get('city'),h.get('district')))
-    pin = plain(h.get('pinCode'))
-    addr = key(h.get('address'))
-    if not re.fullmatch(r'\d{6}',pin):return None,'invalid_pin'
-    if st == 'delhi' and pin.startswith('110'):
-        return 'Delhi','delhi_state_110_pin'
-    if st == 'haryana' and pin.startswith('121') and ci!='palwal' and (ci in ('faridabad','ballabhgarh','ballabgarh') or dist=='faridabad'):
-        return 'Faridabad','faridabad_city_district_pin'
-    if st == 'haryana' and pin.startswith('122') and (ci in ('gurugram','gurgaon') or dist in ('gurugram','gurgaon')):
-        return 'Gurgaon','gurgaon_city_district_pin'
-    if st == 'uttar pradesh' and pin.startswith('201') and (ci in ('noida','gautam buddha nagar') or dist in ('gautam buddha nagar','noida')):
-        if 'greater noida' in addr or 'greater noida' in ci or 'pari chowk' in addr or pin in ('201308','201310','201306','201312'):
-            return None,'outside_noida_greater_noida'
-        if ci=='noida' or 'noida' in addr or pin in ('201301','201303','201304','201305','201307','201309'):
-            return 'Noida','noida_city_locality_pin'
-    if st == 'uttar pradesh' and pin.startswith('201') and (ci=='ghaziabad' or dist=='ghaziabad'):
-        return 'Ghaziabad','ghaziabad_city_district_pin'
-    if st == 'maharashtra':
-        # Some upstream Nagpur/Kolhapur hospital records have clearly wrong Navi Mumbai pincodes.
-        if ci in ('nagpur','kolhapur') and ci not in addr:
-            pass # An obviously contradictory source city will be reviewed below.
-        if ((pin in NAVI_PINS or ((any(k in (ci+' '+addr) for k in NAVI_TERMS)) and (pin.startswith('400') or pin.startswith('410'))))
-            and dist in ('raigad','raigarh','thane','mumbai','navi mumbai','kalamboli','vashi','nerul','kalyan (e)')):
-            if ci in ('nagpur','kolhapur') or ('central avenue' in addr and ci=='nagpur'):
-                return None,'conflicting_city_and_pin'
-            return 'Navi Mumbai','navi_mumbai_locality_pin'
-        if pin.startswith('400') and (ci=='mumbai' or dist=='mumbai'):
-            return 'Mumbai','mumbai_city_district_pin'
-        pune_localities = ('chinchwadgaon','pimpri','chinchwad','pimpri-chinchwad','pimpri chinchwad','nigdi','akurdi','bhosari','wakad','hadapsar','hinjewadi')
-        if ((ci=='pune' or (dist=='pune' and pin.startswith('411')) or ci in pune_localities)
-            and (pin.startswith('411') or pin.startswith('412') or pin.startswith('410'))):
-            return 'Pune','pune_metro_city_pin'
-    if st=='telangana' and (pin.startswith('500') or (ci in ('hyderabad','secunderabad') and pin.startswith('501'))):
-        if ci in ('khammam','mancherial','karimnagar','kamareddy'):
-            return None,'conflicting_hyderabad_city'
-        return 'Hyderabad','hyderabad_500_pin_metro'
-    if st=='karnataka' and (pin.startswith('560') or (ci in ('bengaluru','bangalore') and pin.startswith('562'))):
-        if ci in ('mysore','hubli'):
-            return None,'conflicting_bangalore_city'
-        return 'Bangalore','bangalore_560_pin_metro'
-    if st=='gujarat' and ci!='dahegam' and (ci=='ahmedabad' or (dist=='ahmedabad' and (pin.startswith('380') or pin.startswith('382')))):
-        return 'Ahmedabad','ahmedabad_city_district_pin'
-    return None,'not_in_selected_city'
+
 
 
 def clean_one(h,city,rule):
@@ -135,67 +80,100 @@ def fetch_api():
 
 
 def build(source, fetched_at):
-    hospitals=source.get('hospitals')
-    if source.get('isSuccess') is False or not isinstance(hospitals,list) or len(hospitals)<25000:
+    """Build full-country data from the entire live Medi Assist API snapshot.
+
+    Only source-blacklisted or invalid-identity rows are excluded. Geography does
+    not restrict a record. Cashless approval remains policy/TPA-specific.
+    """
+    hospitals = source.get('hospitals')
+    if source.get('isSuccess') is False or not isinstance(hospitals, list) or len(hospitals) < 25000:
         raise RuntimeError('Source API count/shape failed completeness checks; refusing to publish')
-    original_ids = [r.get('id') for r in hospitals if isinstance(r,dict)]
-    if len(set(map(str,original_ids))) != len(original_ids):
-        raise RuntimeError('Duplicate source hospital IDs: refusing to publish')
-    chosen=[]; excluded=Counter(); city_reasons=Counter(); flagged=[]
+    ids = [h.get('id') for h in hospitals if isinstance(h, dict)]
+    if len(ids) != len(hospitals) or len(set(map(str, ids))) != len(ids):
+        raise RuntimeError('Missing/duplicate source hospital IDs; refusing to publish')
+    chosen, flagged = [], []
+    excluded = Counter()
     for h in hospitals:
-        if not isinstance(h,dict):continue
-        city,reason=assign_city(h)
-        if not city:
-            excluded[reason]+=1
-            if reason.startswith(('outside_noida','conflicting_')):
-                flagged.append({'id':h.get('id'),'name':plain(h.get('name')),'source_city':plain(h.get('city')),'pin':plain(h.get('pinCode')),'reason':reason})
+        city = plain(h.get('city'))
+        state = plain(h.get('state'))
+        # Do not incorrectly assign facilities to another district/city.
+        if not city or not state:
+            excluded['missing_source_city_or_state'] += 1
+            flagged.append({'id':h.get('id'), 'name':plain(h.get('name')),
+                            'state':state, 'city':city,
+                            'reason':'missing_source_city_or_state'})
             continue
-        x=clean_one(h,city,reason)
+        x = clean_one(h, city, 'source_api_city')
+        x['state'] = state
+        x['district'] = plain(h.get('district'))
         if not x['name'] or x['id'] is None or not x['address']:
-            flagged.append({'id':x['id'],'name':x['name'],'source_city':x['source_city'],'pin':x['pin'],'reason':'missing_identifying_field'})
+            excluded['missing_identifying_field'] += 1
+            flagged.append({'id':x['id'],'name':x['name'],'state':state,
+                            'city':city,'reason':'missing_identifying_field'})
             continue
         if x['blacklisted']:
-            flagged.append({'id':x['id'],'name':x['name'],'source_city':x['source_city'],'pin':x['pin'],'reason':'blacklisted_in_source'})
+            excluded['blacklisted_in_source'] += 1
+            flagged.append({'id':x['id'],'name':x['name'],'state':state,
+                            'city':city,'reason':'blacklisted_in_source',
+                            'effective_date':None,
+                            'note':'Medi Assist source flag only; no blacklist effective date supplied'})
             continue
-        chosen.append(x);city_reasons[(city,reason)]+=1
-    chosen.sort(key=lambda x:(CITIES.index(x['city']),x['name'].casefold(),x['id']))
-    if len(chosen)!=len(set(x['id'] for x in chosen)):
-        raise RuntimeError('Duplicate ID in selected network: refusing to publish')
-    counts=Counter(x['city'] for x in chosen)
-    if any(counts[c]<50 for c in CITIES):
-        raise RuntimeError('Implausibly low city result: '+str(counts))
-    metadata={'snapshot_retrieved_at_utc':fetched_at,'source':SOURCE_URL,
-              'data_warning':'API retrieval time is not insurer-level empanelment verification. Confirm cashless eligibility with insurer/TPA before admission.',
-              'network_source_count':len(hospitals),'selected_city_count':len(chosen),
-              'city_counts':{c:counts[c] for c in CITIES},
-              'mapping_version':'geographic-v1.1','blacklisted_and_invalid_records_excluded':True,
-              'city_definitions_note':'Delhi state 110 PIN; Noida excludes Greater Noida; Navi Mumbai includes adjoining Panvel-Kharghar localities, excludes Thane proper; Hyderabad includes 500 PIN metro; Pune includes PCMC.'}
-    audit={'metadata':metadata,'old_june_counts':OLD_CITY_COUNTS,
-           'counts_delta_from_june':{c:counts[c]-OLD_CITY_COUNTS[c] for c in CITIES},
-           'excluded_reasons':dict(excluded),
-           'flagged_records':flagged,
-           'selected_hospital_ppn_count':sum(x['ppn'] for x in chosen),
-           'selected_insurer_ppn_hospital_count':sum(bool(x['ppn_insurers']) for x in chosen),
-           'hospital_ppn_false_but_insurer_ppn_true':sum(not x['ppn'] and bool(x['ppn_insurers']) for x in chosen),
-           'missing_speciality_count':sum(not x['spec'] for x in chosen),
-           'missing_phone_count':sum(not x['phone'] for x in chosen),
-           'insurer_missing_count':sum(x['ins_count']==0 for x in chosen)}
-    return {'metadata':metadata,'hospitals':chosen},audit
+        chosen.append(x)
+    chosen.sort(key=lambda x:(x['state'].casefold(),x['city'].casefold(),x['name'].casefold(),x['id']))
+    if len(chosen) != len(set(x['id'] for x in chosen)):
+        raise RuntimeError('Duplicate hospital ID after filtering')
+    counts = Counter(x['city'] for x in chosen)
+    states = Counter(x['state'] for x in chosen)
+    if len(chosen) < 20000 or len(states) < 15:
+        raise RuntimeError('Implausibly small nationwide result; refusing to publish')
+    metadata = {
+        'snapshot_retrieved_at_utc':fetched_at,
+        'source':SOURCE_URL,
+        'scope':'nationwide',
+        'mapping_version':'nationwide-source-city-v1',
+        'network_source_count':len(hospitals),
+        'selected_city_count':len(chosen),
+        'published_hospital_count':len(chosen),
+        'state_count':len(states),
+        'state_counts':dict(sorted(states.items())),
+        'city_counts':dict(sorted(counts.items())),
+        'blacklisted_and_invalid_records_excluded':True,
+        'data_warning':'API appearance is not insurer/policy cashless confirmation. Verify with insurer/TPA before admission.'
+    }
+    audit = {
+        'metadata':metadata,
+        'excluded_reasons':dict(excluded),
+        'flagged_records':flagged,
+        'selected_hospital_ppn_count':sum(x['ppn'] for x in chosen),
+        'selected_insurer_ppn_hospital_count':sum(bool(x['ppn_insurers']) for x in chosen),
+        'hospital_ppn_false_but_insurer_ppn_true':sum(not x['ppn'] and bool(x['ppn_insurers']) for x in chosen),
+        'missing_speciality_count':sum(not x['spec'] for x in chosen),
+        'missing_phone_count':sum(not x['phone'] for x in chosen),
+        'insurer_missing_count':sum(x['ins_count']==0 for x in chosen),
+    }
+    return {'metadata':metadata,'hospitals':chosen}, audit
 
 
-def safety_gate(new_data,existing_path):
-    if not existing_path.exists():return
-    old=json.loads(existing_path.read_text(encoding='utf-8'))
-    old_counts=old.get('metadata',{}).get('city_counts',{})
-    new_counts=new_data['metadata']['city_counts']
-    if not old_counts:return
-    old_total=sum(old_counts.values());new_total=sum(new_counts.values())
-    if old_total and abs(new_total-old_total)/old_total>.05:
-        raise RuntimeError(f'Snapshot change {old_total}->{new_total} exceeds 5% global guard; manual review required')
-    for city in CITIES:
-        prev=old_counts.get(city,0);cur=new_counts.get(city,0)
-        if prev and abs(cur-prev)/prev>.08:
-            raise RuntimeError(f'{city} changed {prev}->{cur} (>8%); manual review required')
+def safety_gate(new_data, existing_path):
+    """Allow a deliberate 11-city -> nationwide migration, never a silent bad feed.
+
+    Across migration compare SOURCE totals (like for like), not selected UI rows.
+    Subsequent nationwide snapshots have separate source and published-count gates.
+    """
+    if not existing_path.exists():
+        return
+    old = json.loads(existing_path.read_text(encoding='utf-8-sig'))
+    old_meta = old.get('metadata', {})
+    new_meta = new_data['metadata']
+    before_source = old_meta.get('network_source_count')
+    after_source = new_meta['network_source_count']
+    if before_source and not (0.85 * before_source <= after_source <= 1.15 * before_source):
+        raise RuntimeError(f'Source feed count changed unexpectedly: {before_source}->{after_source}; manual review')
+    if old_meta.get('scope') == 'nationwide':
+        old_count = len(old.get('hospitals', []))
+        new_count = len(new_data['hospitals'])
+        if old_count and not (0.85 * old_count <= new_count <= 1.15 * old_count):
+            raise RuntimeError(f'Nationwide published count changed unexpectedly: {old_count}->{new_count}; manual review')
 
 
 def main():
@@ -224,7 +202,7 @@ def main():
         for h in records['hospitals']:
             writer.writerow({k:', '.join(h[k]) if k=='ppn_insurers' else h[k] for k in writer.fieldnames})
     print('Full API records:',records['metadata']['network_source_count'])
-    print('Selected/approved for staged preview:',records['metadata']['selected_city_count'])
+    print('Nationwide hospitals published:',records['metadata']['published_hospital_count'])
     for k,v in records['metadata']['city_counts'].items():print('  %-13s %5d'%(k,v))
     print('Excluded blacklisted/quality records listed in:',args.audit)
     print('STAGING ONLY: generated data. No GitHub publication performed.')

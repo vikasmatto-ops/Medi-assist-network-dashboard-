@@ -1,47 +1,68 @@
+"""NetworkIQ nationwide refresh contract tests. No network calls."""
 import json
-from pathlib import Path
-import sys
+import tempfile
 import unittest
-sys.path.insert(0,str(Path(__file__).parent))
-from refresh_network import assign_city,clean_one,build,CITIES
+from pathlib import Path
+from refresh_network import build, clean_one, safety_gate
 
-class MappingTests(unittest.TestCase):
- def h(self,state,city,district,pin,address='Test hospital in area'):
-  return {'id':123,'name':'Sample Hospital','address':address,'state':state,'city':city,'district':district,'pinCode':pin}
- def test_delhi_district_label(self):
-  self.assertEqual(assign_city(self.h('Delhi','WEST','WEST','110015'))[0],'Delhi')
- def test_faridabad_palwal_not_included(self):
-  self.assertIsNone(assign_city(self.h('Haryana','Palwal','Faridabad','121102'))[0])
- def test_gurugram_alias(self):
-  self.assertEqual(assign_city(self.h('Haryana','GURUGRAM','GURUGRAM','122001'))[0],'Gurgaon')
- def test_noida_excludes_greater_noida(self):
-  self.assertIsNone(assign_city(self.h('Uttar Pradesh','Gautam Buddha Nagar','Gautam Buddha Nagar','201310','Kasna Greater Noida'))[0])
- def test_noida_includes_sector(self):
-  self.assertEqual(assign_city(self.h('Uttar Pradesh','Gautam Buddha Nagar','Gautam Buddha Nagar','201301','Noida sector 18'))[0],'Noida')
- def test_thane_not_navi_mumbai(self):
-  self.assertIsNone(assign_city(self.h('Maharashtra','Thane','Thane','400601','Thane West'))[0])
- def test_vashi_is_navi_mumbai(self):
-  self.assertEqual(assign_city(self.h('Maharashtra','Thane','Thane','400703','Navi Mumbai Vashi'))[0],'Navi Mumbai')
- def test_bad_pin_false_navi(self):
-  self.assertIsNone(assign_city(self.h('Maharashtra','Nagpur','Nagpur','410206','Mahalaxmi Complex Nagpur'))[0])
- def test_hyderabad_metro(self):
-  self.assertEqual(assign_city(self.h('Telangana','Medchal-Malkajgiri','Medchal-Malkajgiri','500092'))[0],'Hyderabad')
- def test_ahmedabad_not_gandhinagar(self):
-  self.assertIsNone(assign_city(self.h('Gujarat','GANDHINAGAR','Gandhinagar','382006','Gandhinagar'))[0])
- def test_insurer_specific_ppn_preserved(self):
-  h=self.h('Delhi','WEST','WEST','110001');h['associatedInsuranceCompanies']=[{'shortName':'NIC','isPPN':True},{'shortName':'Acko','isPPN':False}];h['isPPN']=False
-  r=clean_one(h,'Delhi','test')
-  self.assertFalse(r['ppn']);self.assertEqual(r['ppn_insurers'],['NIC'])
-  self.assertEqual(r['ins_count'],2)
 
-class DatasetTests(unittest.TestCase):
- def test_snapshot_contract(self):
-  p=Path(__file__).parents[1]/'data/hospitals.json'
-  obj=json.loads(p.read_text(encoding='utf-8'))
-  self.assertEqual(set(obj['metadata']['city_counts']),set(CITIES))
-  self.assertEqual(len(obj['hospitals']),obj['metadata']['selected_city_count'])
-  self.assertEqual(len({x['id'] for x in obj['hospitals']}),len(obj['hospitals']))
-  self.assertFalse(any(x['blacklisted'] for x in obj['hospitals']))
-  self.assertTrue(all(x['city'] in CITIES for x in obj['hospitals']))
+def sample(n=25010):
+    hospitals=[]
+    for i in range(n):
+        hospitals.append({'id':i+1,'name':'Hospital '+str(i+1),'address':str(i+1)+' Main Road',
+                          'state':'State '+str(i%25),'city':'City '+str(i%140),
+                          'district':'District '+str(i%30),'pinCode':'110001',
+                          'associatedInsuranceCompanies':[{'shortName':'Insurer A','isPPN':i%2==0}],
+                          'isPPN':i%3==0,'blacklisted':False})
+    return {'isSuccess':True,'hospitals':hospitals}
 
-if __name__=='__main__':unittest.main()
+
+class NationwideContract(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.source=sample()
+        cls.built,cls.audit=build(cls.source,'2026-10-15T00:00:00Z')
+
+    def test_every_state_and_city_included(self):
+        m=self.built['metadata']
+        self.assertEqual(m['scope'],'nationwide')
+        self.assertEqual(m['network_source_count'],25010)
+        self.assertEqual(m['published_hospital_count'],25010)
+        self.assertEqual(m['state_count'],25)
+        self.assertGreater(len(m['city_counts']),11)
+        self.assertTrue(all(x.get('state') for x in self.built['hospitals']))
+
+    def test_insurer_associations_and_ppn_retained(self):
+        h=self.built['hospitals'][0]
+        self.assertEqual(h['ins_count'],1)
+        self.assertEqual(h['ins'],'Insurer A')
+        self.assertIsInstance(h['ppn_insurers'],list)
+
+    def test_blacklisted_only_excluded_from_active(self):
+        src=sample()
+        src['hospitals'][0]['blacklisted']=True
+        records,audit=build(src,'2026-10-15T00:00:00Z')
+        self.assertEqual(len(records['hospitals']),25009)
+        self.assertEqual(audit['excluded_reasons']['blacklisted_in_source'],1)
+        self.assertIsNone(audit['flagged_records'][0]['effective_date'])
+
+    def test_no_city_filter_and_no_valid_pin_requirement(self):
+        src=sample()
+        src['hospitals'][0]['city']='Tiny Remote Town'
+        src['hospitals'][0]['pinCode']=''
+        records,_=build(src,'2026-10-15T00:00:00Z')
+        self.assertTrue(any(x['city']=='Tiny Remote Town' for x in records['hospitals']))
+
+    def test_migration_gate_compares_source_counts(self):
+        with tempfile.TemporaryDirectory() as t:
+            p=Path(t)/'old.json'
+            p.write_text(json.dumps({'metadata':{'network_source_count':25010,'city_counts':{'Delhi':100}},'hospitals':[{}]*100}))
+            safety_gate(self.built,p)
+            newer=json.loads(json.dumps(self.built))
+            newer['metadata']['network_source_count']=15000
+            with self.assertRaises(RuntimeError): safety_gate(newer,p)
+
+    def test_full_country_source_contract_rejects_small(self):
+        with self.assertRaises(RuntimeError):build({'isSuccess':True,'hospitals':[{'id':1}]},'2026-10-15T00:00:00Z')
+
+if __name__=='__main__': unittest.main()
