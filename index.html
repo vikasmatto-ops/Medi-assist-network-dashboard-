@@ -101,7 +101,7 @@ body{font-family:'Inter',sans-serif;background:#f0f2f5;color:#1a1a2e;min-height:
 <div class="topbar">
   <div class="logo">
     <div class="logo-icon">M</div>
-    <div class="logo-text">Medi<span>Assist</span> Hospital Finder</div>
+    <div class="logo-text">Network<span>IQ</span> Hospital Finder</div>
   </div>
   <div class="top-badge" id="total-badge">Loading...</div>
 </div>
@@ -111,6 +111,11 @@ body{font-family:'Inter',sans-serif;background:#f0f2f5;color:#1a1a2e;min-height:
   <div class="search-box">
     <div class="search-row">
       <input class="si" id="q-search" placeholder="Search hospital name, area or PIN..." oninput="applyF()">
+      <select class="ss" id="q-source" onchange="applyF()">
+        <option value="">Both Sources</option>
+        <option value="Medi Assist">Medi Assist</option>
+        <option value="ICICI Lombard">ICICI Lombard</option>
+      </select>
       <select class="ss" id="q-state" onchange="onStateChange()"><option value="">All States</option></select>
       <select class="ss" id="q-city" onchange="applyF()"><option value="">All Cities</option></select>
       <select class="ss" id="q-spec" onchange="applyF()">
@@ -282,17 +287,19 @@ function applyF(){
   var q=document.getElementById('q-search').value.toLowerCase().trim();
   var city=document.getElementById('q-city').value;
   var state=document.getElementById('q-state').value;
+  var source=document.getElementById('q-source').value;
   var spec=document.getElementById('q-spec').value.toLowerCase();
   var ins=document.getElementById('q-ins').value.toLowerCase();
   var ppnOnly=document.getElementById('q-ppn').checked;
   filtered=DATA.filter(function(r){
+    if(source&&r.source!==source)return false;
     if(state&&r.state!==state)return false;
     if(city&&r.city!==city)return false;
     if(ppnOnly){if(ins){if(!(r.ppn_insurers||[]).some(function(n){return n.toLowerCase()===ins;}))return false;}else if(!r.ppn)return false;}
     if(spec&&r.spec.toLowerCase().indexOf(spec)===-1)return false;
     if(ins&&(r.ins||'').split(', ').every(function(n){return n.toLowerCase()!==ins;}))return false;
     if(q){
-      var h=(r.name+' '+r.address+' '+r.city+' '+r.state+' '+r.pin).toLowerCase();
+      var h=(r.name+' '+r.address+' '+(r.area||'')+' '+r.city+' '+r.state+' '+r.pin+' '+r.source).toLowerCase();
       if(h.indexOf(q)===-1)return false;
     }
     return true;
@@ -350,6 +357,7 @@ function render(){
       '<div class="ctop">'+
         '<div class="cname">'+esc(r.name)+'</div>'+
         '<div class="cbadges">'+
+       '<span class="badge" style="background:#e0e7ff;color:#3730a3">'+esc(r.source||'Unknown source')+'</span>'+
           (r.ppn?'<span class="badge ppn">&#10003; PPN</span>':'')+
           '<span class="badge city" style="background:'+col+'18;color:'+col+'">'+esc(r.city)+', '+esc(r.state)+'</span>'+
         '</div>'+
@@ -359,7 +367,7 @@ function render(){
       (r.pin&&r.pin!=='nan'&&r.pin.length>2?'<div class="cdet"><span class="cico">&#128206;</span>PIN '+esc(r.pin)+'</div>':'')+
       (r.rating>0?'<div class="cdet"><span class="cico">&#11088;</span>'+r.rating.toFixed(1)+' / 5.0</div>':'')+
       (specs?'<div class="spwrap">'+specs+'</div>':'')+
-      (insTxt?'<div class="inssec"><div class="inslbl">Insurers listed by Medi Assist ('+insArr.length+')</div>'+insTxt+'</div>':'')+
+      (insTxt?'<div class="inssec"><div class="inslbl">'+(r.source==='ICICI Lombard'?'ICICI Lombard search directory — verify policy eligibility':'Insurers listed by Medi Assist')+' ('+insArr.length+')</div>'+insTxt+'</div>':'')+
     '</div>';
     html+=cardHtml;
   });
@@ -374,15 +382,17 @@ function chgPage(d){
 }
 
 function clearF(){
-  ['q-search','q-state','q-city','q-spec','q-ins'].forEach(function(id){document.getElementById(id).value='';});
+  ['q-search','q-source','q-state','q-city','q-spec','q-ins'].forEach(function(id){document.getElementById(id).value='';});
   document.getElementById('q-ppn').checked=false;
   applyF();
 }
 
 function dlCSV(){
-  var hdr=['Name','Address','State','City','PIN','Phone','PPN','Rating','Ins_Count','Specialities','Insurers'];
+  var hdr=['Source','Source ID','Name','Address','State','City','PIN','Phone','PPN','Rating','Ins_Count','Specialities','Insurers'];
   var rows=filtered.map(function(r){
     return [
+      '"'+(r.source||'').replace(/"/g,"''")+'"',
+      '"'+String(r.reference_id||r.id||'').replace(/"/g,"''")+'"',
       '"'+r.name.replace(/"/g,"''")+'"',
       '"'+r.address.replace(/"/g,"''")+'"',
       r.state,r.city,r.pin,r.phone,
@@ -444,28 +454,73 @@ function onStateChange(){
   applyF();
 }
 
-function loadCurrentNetwork(){
-  fetch('./data/hospitals.json',{cache:'no-store'})
-    .then(function(res){if(!res.ok)throw new Error('HTTP '+res.status);return res.json();})
-    .then(function(data){
-      if(!Array.isArray(data.hospitals) || data.hospitals.length<20000 || !data.metadata || data.metadata.scope!=='nationwide'){throw new Error('Invalid or incomplete hospital dataset');}
-      DATA=data.hospitals;
-      filtered=DATA.slice();
-      syncFilterOptions();
-      syncLocationOptions();
-      var m=data.metadata || {};
-      var date=m.snapshot_retrieved_at_utc ? new Date(m.snapshot_retrieved_at_utc).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',dateStyle:'medium'}):'date unknown';
-      var hero=document.getElementById('source-meta');
-      if(hero)hero.textContent='Search '+DATA.length.toLocaleString('en-IN')+' nationwide hospitals — Medi Assist API snapshot '+date+' · Please confirm cashless empanelment before admission';
-      buildKPI();applyF();
-    })
-    .catch(function(err){
-      console.error('Network data could not be loaded',err);
-      document.getElementById('total-badge').textContent='Data unavailable';
-      document.getElementById('res-cnt').textContent='Unable to load verified snapshot';
-      document.getElementById('hgrid').textContent='Hospital data could not be loaded. Please try again later. No older data will be shown as current.';
-    });
+<!-- NETWORKIQ_DUAL_SOURCE_ICICI_V1 -->
+// NETWORKIQ_DUAL_SOURCE_ICICI_V1
+function networkiqCity(v){
+  var s=String(v||'').trim().replace(/\s+/g,' ');
+  var key=s.toLocaleLowerCase('en-IN');
+  var aliases={'gurugram':'Gurgaon','gurgaon':'Gurgaon',
+               'bengaluru':'Bangalore','bangalore':'Bangalore',
+               'belagavi':'Belgaum','belgaum':'Belgaum'};
+  return aliases[key]||s.toLocaleLowerCase('en-IN').replace(/\b\S/g,function(c){return c.toLocaleUpperCase('en-IN');});
 }
+function networkiqState(v){
+  var s=String(v||'').trim().replace(/\s+/g,' ');
+  return s.toLocaleLowerCase('en-IN').replace(/\b\S/g,function(c){return c.toLocaleUpperCase('en-IN');});
+}
+function networkiqRows(rows,source){
+  return rows.map(function(r){
+    var x=Object.assign({},r);
+    x.source=source;
+    x.source_city=r.city;
+    x.source_state=r.state;
+    x.city=networkiqCity(r.city);
+    x.state=networkiqState(r.state);
+    x.pin=x.pin||'';
+    x.phone=x.phone||'';
+    x.spec=x.spec||'';
+    x.rating=Number(x.rating)||0;
+    x.ppn=source==='Medi Assist'&&r.ppn===true;
+    x.ppn_insurers=source==='Medi Assist'&&Array.isArray(r.ppn_insurers)?r.ppn_insurers:[];
+    x.ins=x.ins||'';
+    x.ins_count=Number(x.ins_count)||0;
+    return x;
+  });
+}
+function networkiqDate(v){
+  if(!v)return 'date unknown';
+  var dt=new Date(v);
+  return isNaN(dt.getTime())?'date unknown':dt.toLocaleDateString('en-IN',{timeZone:'Asia/Kolkata',day:'numeric',month:'short',year:'numeric'});
+}
+function loadCurrentNetwork(){
+  Promise.all([
+    fetch('./data/hospitals.json',{cache:'no-store'}).then(function(res){
+      if(!res.ok)throw new Error('Medi Assist file HTTP '+res.status);return res.json();
+    }),
+    fetch('./data/icici_lombard.json',{cache:'no-store'}).then(function(res){
+      if(!res.ok)throw new Error('ICICI file HTTP '+res.status);return res.json();
+    })
+  ]).then(function(parts){
+    var medi=parts[0], icici=parts[1];
+    if(!Array.isArray(medi.hospitals)||medi.hospitals.length<20000||!medi.metadata||medi.metadata.scope!=='nationwide')
+      throw new Error('Missing or incomplete Medi Assist nationwide dataset');
+    if(!Array.isArray(icici.hospitals)||icici.hospitals.length<14000||!icici.metadata||icici.metadata.verification_level!=='OFFICIAL_SEARCH_RESULT_ONLY'||icici.hospitals.length!==icici.metadata.record_count)
+      throw new Error('Missing or incomplete ICICI Lombard snapshot');
+    DATA=networkiqRows(medi.hospitals,'Medi Assist').concat(networkiqRows(icici.hospitals,'ICICI Lombard'));
+    filtered=DATA.slice();
+    syncFilterOptions();
+    syncLocationOptions();
+    var hero=document.getElementById('source-meta');
+    if(hero)hero.textContent='Nationwide search · '+medi.hospitals.length.toLocaleString('en-IN')+' Medi Assist records (API '+networkiqDate(medi.metadata.snapshot_retrieved_at_utc)+') + '+icici.hospitals.length.toLocaleString('en-IN')+' ICICI Lombard search listings (captured through '+networkiqDate(icici.metadata.observed_through_utc)+'). Verify current, policy-specific cashless eligibility directly with the insurer/TPA.';
+    buildKPI();applyF();
+  }).catch(function(err){
+    console.error('Network data could not be loaded',err);
+    document.getElementById('total-badge').textContent='Data unavailable';
+    document.getElementById('res-cnt').textContent='Unable to load complete network dataset';
+    document.getElementById('hgrid').textContent='Network data is unavailable or incomplete. Please try again later. No partial data will be shown as complete.';
+  });
+}
+
 loadCurrentNetwork();
 </script>
 </body>
