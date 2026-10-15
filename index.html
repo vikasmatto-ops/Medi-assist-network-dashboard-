@@ -111,10 +111,11 @@ body{font-family:'Inter',sans-serif;background:#f0f2f5;color:#1a1a2e;min-height:
   <div class="search-box">
     <div class="search-row">
       <input class="si" id="q-search" placeholder="Search hospital name, area or PIN..." oninput="applyF()">
-      <select class="ss" id="q-source" onchange="applyF()">
+      <select class="ss" id="q-source" onchange="buildKPI();applyF()">
         <option value="">Both Sources</option>
         <option value="Medi Assist">Medi Assist</option>
         <option value="ICICI Lombard">ICICI Lombard</option>
+        <option value="IndusInd General Insurance">IndusInd General Insurance</option>
       </select>
       <select class="ss" id="q-state" onchange="onStateChange()"><option value="">All States</option></select>
       <select class="ss" id="q-city" onchange="applyF()"><option value="">All Cities</option></select>
@@ -241,7 +242,9 @@ var CC={
 var KPI_CITIES=[];
 function buildKPI(){
   var cnt=new Map(), ppnTotal=0;
-  DATA.forEach(function(r){
+  var selectedSource=document.getElementById('q-source').value;
+  var kpiRows=selectedSource?DATA.filter(function(r){return r.source===selectedSource;}):DATA;
+  kpiRows.forEach(function(r){
     var st=r.state||'', c=r.city||'', k=st+'|'+c;
     var entry=cnt.get(k)||{state:st,city:c,count:0,ppn:0};
     entry.count++;
@@ -249,7 +252,7 @@ function buildKPI(){
     cnt.set(k,entry);
   });
   KPI_CITIES=Array.from(cnt.values()).sort(function(a,b){return b.count-a.count;}).slice(0,12);
-  var html='<div class="kc active" id="kc-All" onclick="fcity(this)"><div class="kc-name">All India</div><div class="kc-num">'+DATA.length.toLocaleString()+'</div><div class="kc-ppn">'+ppnTotal+' PPN</div></div>';
+  var html='<div class="kc active" id="kc-All" onclick="fcity(this)"><div class="kc-name">All India</div><div class="kc-num">'+kpiRows.length.toLocaleString()+'</div><div class="kc-ppn">'+ppnTotal+' PPN</div></div>';
   KPI_CITIES.forEach(function(item,i){
     html+='<div class="kc" id="kc-'+i+'" onclick="fcity(this)"><div class="kc-name">'+esc(item.city)+'</div><div class="kc-num">'+item.count.toLocaleString()+'</div><div class="kc-ppn">'+esc(item.state)+' · '+item.ppn+' PPN</div></div>';
   });
@@ -299,7 +302,7 @@ function applyF(){
     if(spec&&r.spec.toLowerCase().indexOf(spec)===-1)return false;
     if(ins&&(r.ins||'').split(', ').every(function(n){return n.toLowerCase()!==ins;}))return false;
     if(q){
-      var h=(r.name+' '+r.address+' '+(r.area||'')+' '+r.city+' '+r.state+' '+r.pin+' '+r.source).toLowerCase();
+      var h=(r.name+' '+r.address+' '+(r.area||'')+' '+r.city+' '+r.state+' '+r.pin+' '+r.source+' '+(r.network_type||'')).toLowerCase();
       if(h.indexOf(q)===-1)return false;
     }
     return true;
@@ -358,6 +361,7 @@ function render(){
         '<div class="cname">'+esc(r.name)+'</div>'+
         '<div class="cbadges">'+
        '<span class="badge" style="background:#e0e7ff;color:#3730a3">'+esc(r.source||'Unknown source')+'</span>'+
+       (r.source==='IndusInd General Insurance'&&r.network_type?'<span class="badge" style="background:#e0f2fe;color:#075985">'+esc(r.network_type)+'</span>':'')+
           (r.ppn?'<span class="badge ppn">&#10003; PPN</span>':'')+
           '<span class="badge city" style="background:'+col+'18;color:'+col+'">'+esc(r.city)+', '+esc(r.state)+'</span>'+
         '</div>'+
@@ -367,7 +371,7 @@ function render(){
       (r.pin&&r.pin!=='nan'&&r.pin.length>2?'<div class="cdet"><span class="cico">&#128206;</span>PIN '+esc(r.pin)+'</div>':'')+
       (r.rating>0?'<div class="cdet"><span class="cico">&#11088;</span>'+r.rating.toFixed(1)+' / 5.0</div>':'')+
       (specs?'<div class="spwrap">'+specs+'</div>':'')+
-      (insTxt?'<div class="inssec"><div class="inslbl">'+(r.source==='ICICI Lombard'?'ICICI Lombard search directory — verify policy eligibility':'Insurers listed by Medi Assist')+' ('+insArr.length+')</div>'+insTxt+'</div>':'')+
+      (insTxt?'<div class="inssec"><div class="inslbl">'+(r.source==='ICICI Lombard'?'ICICI Lombard search directory — verify policy eligibility':(r.source==='IndusInd General Insurance'?'IndusInd General Insurance source listing — verify policy eligibility':'Insurers listed by Medi Assist'))+' ('+insArr.length+')</div>'+insTxt+'</div>':'')+
     '</div>';
     html+=cardHtml;
   });
@@ -455,6 +459,7 @@ function onStateChange(){
 }
 
 <!-- NETWORKIQ_DUAL_SOURCE_ICICI_V1 -->
+<!-- NETWORKIQ_THREE_SOURCE_INDUSIND_V1 -->
 // NETWORKIQ_DUAL_SOURCE_ICICI_V1
 function networkiqCity(v){
   var s=String(v||'').trim().replace(/\s+/g,' ');
@@ -499,19 +504,24 @@ function loadCurrentNetwork(){
     }),
     fetch('./data/icici_lombard.json',{cache:'no-store'}).then(function(res){
       if(!res.ok)throw new Error('ICICI file HTTP '+res.status);return res.json();
+    }),
+    fetch('./data/indusind_general.json',{cache:'no-store'}).then(function(res){
+      if(!res.ok)throw new Error('IndusInd file HTTP '+res.status);return res.json();
     })
   ]).then(function(parts){
-    var medi=parts[0], icici=parts[1];
+    var medi=parts[0], icici=parts[1], indus=parts[2];
     if(!Array.isArray(medi.hospitals)||medi.hospitals.length<20000||!medi.metadata||medi.metadata.scope!=='nationwide')
       throw new Error('Missing or incomplete Medi Assist nationwide dataset');
     if(!Array.isArray(icici.hospitals)||icici.hospitals.length<14000||!icici.metadata||icici.metadata.verification_level!=='OFFICIAL_SEARCH_RESULT_ONLY'||icici.hospitals.length!==icici.metadata.record_count)
       throw new Error('Missing or incomplete ICICI Lombard snapshot');
-    DATA=networkiqRows(medi.hospitals,'Medi Assist').concat(networkiqRows(icici.hospitals,'ICICI Lombard'));
+    if(!indus.metadata || indus.metadata.source_name!=='IndusInd General Insurance' || indus.metadata.verification_level!=='OFFICIAL_SEARCH_RESULT_ONLY' || !Array.isArray(indus.hospitals) || indus.hospitals.length!==indus.metadata.record_count || indus.hospitals.length!==15229)
+      throw new Error('Missing or incomplete IndusInd nationwide snapshot');
+    DATA=networkiqRows(medi.hospitals,'Medi Assist').concat(networkiqRows(icici.hospitals,'ICICI Lombard'),networkiqRows(indus.hospitals,'IndusInd General Insurance'));
     filtered=DATA.slice();
     syncFilterOptions();
     syncLocationOptions();
     var hero=document.getElementById('source-meta');
-    if(hero)hero.textContent='Nationwide search · '+medi.hospitals.length.toLocaleString('en-IN')+' Medi Assist records (API '+networkiqDate(medi.metadata.snapshot_retrieved_at_utc)+') + '+icici.hospitals.length.toLocaleString('en-IN')+' ICICI Lombard search listings (captured through '+networkiqDate(icici.metadata.observed_through_utc)+'). Verify current, policy-specific cashless eligibility directly with the insurer/TPA.';
+    if(hero)hero.textContent='Nationwide search · '+medi.hospitals.length.toLocaleString('en-IN')+' Medi Assist records (API '+networkiqDate(medi.metadata.snapshot_retrieved_at_utc)+') + '+icici.hospitals.length.toLocaleString('en-IN')+' ICICI Lombard search listings (captured through '+networkiqDate(icici.metadata.observed_through_utc)+') + '+indus.hospitals.length.toLocaleString('en-IN')+' IndusInd source listings (API '+networkiqDate(indus.metadata.retrieved_at_utc)+', IPD/OPD distinguished). These are source records, not unique hospitals. Verify current policy-specific cashless eligibility with insurer/TPA.';
     buildKPI();applyF();
   }).catch(function(err){
     console.error('Network data could not be loaded',err);
