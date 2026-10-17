@@ -1,0 +1,37 @@
+name: Refresh authorized public Hexa hospital directory
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0,30 * * * *'
+permissions:
+  contents: write
+concurrency:
+  group: hexa-public-refresher
+  cancel-in-progress: false
+jobs:
+  refresh:
+    if: ${{ vars.HEXA_PUBLIC_PUBLISH_APPROVED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install read-only Google authentication
+        run: pip install 'google-auth>=2.30,<3' 'requests>=2.31,<3'
+      - name: Read and validate curated public fields only
+        env:
+          HEXA_PUBLIC_PUBLISH_APPROVED: ${{ vars.HEXA_PUBLIC_PUBLISH_APPROVED }}
+          HEXA_SHEET_ID: ${{ secrets.HEXA_SHEET_ID }}
+          HEXA_GOOGLE_CREDENTIALS_JSON: ${{ secrets.HEXA_GOOGLE_CREDENTIALS_JSON }}
+        run: python scripts/sync_hexa_public.py --output data/hexa_hospitals.json
+      - name: Commit approved snapshot if changed
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/hexa_hospitals.json
+          if git diff --cached --quiet; then echo 'No changes'; else
+            git commit -m 'Update curated public Hexa hospital listings'
+            git push
+          fi

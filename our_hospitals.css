@@ -1,0 +1,46 @@
+#nihexa-launch{position:fixed;top:16px;right:18px;z-index:4000;border:0;border-radius:999px;padding:11px 19px;background:#0e5745;color:#fff;box-shadow:0 6px 20px #001e1942;font:700 13px system-ui,Arial;cursor:pointer;letter-spacing:.02em}
+#nihexa-launch:hover{background:#0b4036}
+#nihexa-panel{display:none;position:fixed;inset:0;z-index:5000;overflow-y:auto;background:#f4f7f9;color:#132a36;font-family:system-ui,-apple-system,'Segoe UI',Arial,sans-serif}
+#nihexa-panel *{box-sizing:border-box}
+#nihexa-panel .nh-top{background:linear-gradient(120deg,#0c3840,#0e6653);color:#fff;padding:22px 30px}
+#nihexa-panel .nh-top-inner,#nihexa-panel .nh-content{max-width:1340px;margin:auto}
+#nihexa-panel .nh-kicker{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#b6e3d0;font-weight:700}
+#nihexa-panel h1{font-size:29px;font-weight:750;margin:7px 0 5px;letter-spacing:-.04em;color:#fff}
+#nihexa-panel .nh-sub{color:#d1e9e1;font-size:13px;max-width:890px;line-height:1.6}
+#nihexa-panel .nh-close{float:right;background:#ffffff1d;color:#fff;border:1px solid #ffffff50;padding:10px 16px;border-radius:10px;cursor:pointer;font-weight:700}
+#nihexa-panel .nh-content{padding:22px 24px 60px}
+#nihexa-panel .nh-note{border:1px solid #bcdcd0;background:#eaf8f1;padding:11px 15px;border-radius:11px;margin-bottom:16px;color:#245b48;font-size:12px;line-height:1.6}
+#nihexa-panel .nh-kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-bottom:18px}
+#nihexa-panel .nh-kpi{background:#fff;border:1px solid #e2e9ed;border-radius:13px;padding:18px 20px;box-shadow:0 2px 10px #12243508}
+#nihexa-panel .nh-kpi-label{font-size:12px;color:#617784}
+#nihexa-panel .nh-kpi-num{font-size:26px;font-weight:800;margin-top:7px;letter-spacing:-.05em;font-variant-numeric:tabular-nums}
+#nihexa-panel .nh-toolbar{display:grid;grid-template-columns:minmax(180px,2fr) repeat(3,minmax(130px,1fr));gap:12px;background:#fff;border:1px solid #e1e8ed;border-radius:13px;padding:15px;margin:12px 0}
+#nihexa-panel input,#nihexa-panel select{width:100%;border:1px solid #cfdbdf;border-radius:8px;background:#fff;color:#243a45;font:13px system-ui;padding:11px 12px;outline-offset:2px}
+#nihexa-panel .nh-sectiontitle{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin:17px 0 11px}
+#nihexa-panel h2{font-size:17px;letter-spacing:-.02em;font-weight:750;margin:0}
+#nihexa-panel .nh-updated{font-size:12px;color:#56717c}
+#nihexa-panel .nh-card{border:1px solid #e1e8ed;border-radius:13px;background:#fff;padding:15px 18px;margin:9px 0;box-shadow:0 1px 4px #102e2d08}
+#nihexa-panel .nh-card-head{display:flex;justify-content:space-between;gap:12px;align-items:start}
+#nihexa-panel .nh-name{font-size:15px;font-weight:750;color:#183342}
+#nihexa-panel .nh-where{font-size:12px;color:#64808a;margin-top:5px}
+#nihexa-panel .nh-pills{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+#nihexa-panel .nh-pill{font-size:11px;padding:5px 9px;border-radius:999px;background:#eef3f4;color:#49606a;font-weight:700;white-space:nowrap}
+#nihexa-panel .nh-pill.ACTIVE,#nihexa-panel .nh-pill.YES{background:#e2f6e9;color:#117341}
+#nihexa-panel .nh-pill.ON_HOLD,#nihexa-panel .nh-pill.CONDITIONAL{background:#fff3d6;color:#8a5c09}
+#nihexa-panel .nh-pill.INACTIVE,#nihexa-panel .nh-pill.NO{background:#f2f3f4;color:#53646d}
+#nihexa-panel .nh-pill.REVIEW{background:#fee7e4;color:#a13b32}
+#nihexa-panel .nh-line{margin-top:10px;display:flex;flex-wrap:wrap;gap:15px;align-items:center;font-size:12px;color:#46606e}
+#nihexa-panel .nh-detail{margin-top:12px;padding-top:10px;border-top:1px solid #ebeff1;font-size:12px;color:#3a5664}
+#nihexa-panel .nh-detail summary{cursor:pointer;font-weight:700;color:#0b705e}
+#nihexa-panel .nh-matrix{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:10px}
+#nihexa-panel .nh-matrix>div{background:#f7fafb;border-radius:7px;padding:8px;display:flex;justify-content:space-between;gap:8px;font-size:11px}
+#nihexa-panel .nh-matrix span:first-child{overflow-wrap:anywhere}
+#nihexa-panel .nh-more{display:flex;justify-content:center;margin:18px}
+#nihexa-panel .nh-more button{background:#0e6653;color:white;padding:10px 24px;border:none;border-radius:8px;cursor:pointer}
+#nihexa-panel .nh-empty{padding:30px;text-align:center;background:#fff;border:1px dashed #c9d4d7;border-radius:12px;color:#4e6571}
+#nihexa-panel .nh-changes{margin-top:24px;background:#fff;border:1px solid #e0e8eb;border-radius:13px;padding:16px}
+#nihexa-panel .nh-changes p{font-size:12px;color:#526b74;margin:8px 0}
+@media(max-width:900px){#nihexa-panel .nh-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}#nihexa-panel .nh-toolbar{grid-template-columns:repeat(2,minmax(0,1fr))}#nihexa-panel .nh-matrix{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:550px){#nihexa-panel .nh-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}#nihexa-panel .nh-toolbar{grid-template-columns:1fr}#nihexa-panel .nh-matrix{grid-template-columns:1fr}#nihexa-panel .nh-content{padding:16px 12px 40px}#nihexa-panel .nh-top{padding:20px 15px}#nihexa-panel .nh-card-head{flex-direction:column}#nihexa-panel h1{font-size:24px}#nihexa-launch{top:auto;bottom:16px;right:12px}}
+#nihexa-panel #nihexa-error:empty{display:none}
+#nihexa-panel #nihexa-export{background:#fff;border:1px solid #cbd8dc;border-radius:7px;padding:7px 11px;font:600 11px system-ui;color:#245366;cursor:pointer;margin-left:8px}

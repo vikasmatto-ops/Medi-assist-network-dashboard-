@@ -96,8 +96,33 @@ body{font-family:'Inter',sans-serif;background:#f0f2f5;color:#1a1a2e;min-height:
 .ins-more .ins-chips{padding:6px 0}
 .ins-empty{font-size:10px;color:#94a3b8}
 </style>
+<link rel="stylesheet" href="./our_hospitals.css?v=1">
 </head>
 <body>
+<!-- NETWORKIQ_OUR_HOSPITALS_PUBLIC_20261017 -->
+<button id="nihexa-launch" type="button">Our Hospitals ↗</button>
+    <section id="nihexa-panel" aria-label="Our Hospitals — Hexa hospital network">
+      <div class="nh-top"><div class="nh-top-inner">
+        <button id="nihexa-close" class="nh-close" type="button">← All Networks</button>
+        <div class="nh-kicker">NetworkIQ / Hexa Health</div>
+        <h1>Our Hospital Network</h1>
+        <div class="nh-sub">Hospital status and insurer/TPA empanelment recorded in the Hexa master. Read-only public snapshot, refreshed from the authorized source. Listings do not guarantee policy-specific cashless approval.</div>
+      </div></div>
+      <div class="nh-content">
+        <div class="nh-note">Operational status is Hexa's internal status; it is independent of any insurer's public network listing. A missing official match is not evidence of delisting. On Hold and Inactive hospitals remain visible, but are not recommended as Active.</div>
+        <div id="nihexa-kpis" class="nh-kpis"></div>
+        <div class="nh-toolbar"><input id="nihexa-search" placeholder="Search hospital, city or PIN" aria-label="Search hospitals">
+          <select id="nihexa-city" aria-label="City"><option value="">All cities</option></select>
+          <select id="nihexa-status" aria-label="Hospital status"><option value="">All statuses</option><option value="ACTIVE">Active</option><option value="ON_HOLD">On Hold</option><option value="INACTIVE">Inactive</option><option value="REVIEW">Needs review</option><option value="UNKNOWN">Unknown</option></select>
+          <select id="nihexa-provider" aria-label="Insurer or TPA"><option value="">All insurers & TPAs</option></select></div>
+        <div id="nihexa-error" class="nh-note" role="status"></div>
+        <div class="nh-sectiontitle"><h2 id="nihexa-found">Our Hospitals</h2><div><span id="nihexa-updated" class="nh-updated"></span> <button id="nihexa-export" type="button">Export filtered CSV</button></div></div>
+        <div id="nihexa-hospitals"></div>
+        <div id="nihexa-more" class="nh-more" hidden><button id="nihexa-more-button" type="button">Load more</button></div>
+        <div id="nihexa-changes" class="nh-changes"></div>
+      </div>
+    </section>
+
 <div class="topbar">
   <div class="logo">
     <div class="logo-icon">M</div>
@@ -112,10 +137,11 @@ body{font-family:'Inter',sans-serif;background:#f0f2f5;color:#1a1a2e;min-height:
     <div class="search-row">
       <input class="si" id="q-search" placeholder="Search hospital name, area or PIN..." oninput="applyF()">
       <select class="ss" id="q-source" onchange="syncCityOptions();buildKPI();applyF()">
-        <option value="">Both Sources</option>
+        <option value="">All sources</option>
         <option value="Medi Assist">Medi Assist</option>
         <option value="ICICI Lombard">ICICI Lombard</option>
         <option value="IndusInd General Insurance">IndusInd General Insurance</option>
+        <option value="Care Health">Care Health</option>
       </select>
       <select class="ss" id="q-state" onchange="onStateChange()"><option value="">All States</option></select>
       <select class="ss" id="q-city" onchange="applyF()"><option value="">All Cities</option></select>
@@ -365,6 +391,7 @@ function render(){
         '<div class="cbadges">'+
        '<span class="badge" style="background:#e0e7ff;color:#3730a3">'+esc(r.source||'Unknown source')+'</span>'+
        (r.source==='IndusInd General Insurance'&&r.network_type?'<span class="badge" style="background:#e0f2fe;color:#075985">'+esc(r.network_type)+'</span>':'')+
+       (r.source==='Care Health'?'<span class="badge" style="background:#fff3df;color:#965a13">'+(Array.isArray(r.care_category_codes)&&r.care_category_codes.length?r.care_category_codes.map(esc).join(', '):'Product network unknown')+'</span>':'')+
           (r.ppn?'<span class="badge ppn">&#10003; PPN</span>':'')+
           '<span class="badge city" style="background:'+col+'18;color:'+col+'">'+esc(r.city||(r.search_city?r.search_city+' (PIN matched)':'City not provided'))+', '+esc(r.state||'State not provided')+'</span>'+
         '</div>'+
@@ -374,7 +401,7 @@ function render(){
       (r.pin&&r.pin!=='nan'&&r.pin.length>2?'<div class="cdet"><span class="cico">&#128206;</span>PIN '+esc(r.pin)+'</div>':'')+
       (r.rating>0?'<div class="cdet"><span class="cico">&#11088;</span>'+r.rating.toFixed(1)+' / 5.0</div>':'')+
       (specs?'<div class="spwrap">'+specs+'</div>':'')+
-      (insTxt?'<div class="inssec"><div class="inslbl">'+(r.source==='ICICI Lombard'?'ICICI Lombard search directory — verify policy eligibility':(r.source==='IndusInd General Insurance'?'IndusInd General Insurance source listing — verify policy eligibility':'Insurers listed by Medi Assist'))+' ('+insArr.length+')</div>'+insTxt+'</div>':'')+
+      (insTxt?'<div class="inssec"><div class="inslbl">'+(r.source==='ICICI Lombard'?'ICICI Lombard search directory — verify policy eligibility':(r.source==='IndusInd General Insurance'?'IndusInd General Insurance source listing — verify policy eligibility':(r.source==='Care Health'?'Care Health public locator (plan eligibility unverified)':'Insurers listed by Medi Assist')))+' ('+insArr.length+')</div>'+insTxt+'</div>':'')+
     '</div>';
     html+=cardHtml;
   });
@@ -464,6 +491,7 @@ function onStateChange(){
 
 <!-- NETWORKIQ_DUAL_SOURCE_ICICI_V1 -->
 <!-- NETWORKIQ_THREE_SOURCE_INDUSIND_V1 -->
+<!-- NETWORKIQ_CARE_FOURTH_SOURCE_20261017 -->
 // NETWORKIQ_DUAL_SOURCE_ICICI_V1
 function networkiqCity(v){
   var s=String(v||'').trim().replace(/\s+/g,' ');
@@ -552,22 +580,27 @@ function loadCurrentNetwork(){
     }),
     fetch('./data/indusind_general.json',{cache:'no-store'}).then(function(res){
       if(!res.ok)throw new Error('IndusInd file HTTP '+res.status);return res.json();
+    }),
+    fetch('./data/care_health.json',{cache:'no-store'}).then(function(res){
+      if(!res.ok)throw new Error('Care Health file HTTP '+res.status);return res.json();
     })
   ]).then(function(parts){
-    var medi=parts[0], icici=parts[1], indus=parts[2];
+    var medi=parts[0], icici=parts[1], indus=parts[2], care=parts[3];
     if(!Array.isArray(medi.hospitals)||medi.hospitals.length<20000||!medi.metadata||medi.metadata.scope!=='nationwide')
       throw new Error('Missing or incomplete Medi Assist nationwide dataset');
     if(!Array.isArray(icici.hospitals)||icici.hospitals.length<14000||!icici.metadata||icici.metadata.verification_level!=='OFFICIAL_SEARCH_RESULT_ONLY'||icici.hospitals.length!==icici.metadata.record_count)
       throw new Error('Missing or incomplete ICICI Lombard snapshot');
     if(!indus.metadata || indus.metadata.source_name!=='IndusInd General Insurance' || indus.metadata.verification_level!=='OFFICIAL_SEARCH_RESULT_ONLY' || !Array.isArray(indus.hospitals) || indus.hospitals.length!==indus.metadata.record_count || indus.hospitals.length!==15229)
       throw new Error('Missing or incomplete IndusInd nationwide snapshot');
-    DATA=networkiqRows(medi.hospitals,'Medi Assist').concat(networkiqRows(icici.hospitals,'ICICI Lombard'),networkiqRows(indus.hospitals,'IndusInd General Insurance'));
+    if(!care.metadata || care.metadata.source_name!=='Care Health' || !Array.isArray(care.hospitals) || care.hospitals.length<1000 || care.metadata.state_attributed_hospital_rows!==care.hospitals.length || care.metadata.policy_specific_cashless_eligibility_verified!==false)
+      throw new Error('Missing or unverifiable Care Health staging snapshot');
+    DATA=networkiqRows(medi.hospitals,'Medi Assist').concat(networkiqRows(icici.hospitals,'ICICI Lombard'),networkiqRows(indus.hospitals,'IndusInd General Insurance'),networkiqRows(care.hospitals,'Care Health'));
     networkiqApplyLocationEvidence();
     filtered=DATA.slice();
     syncFilterOptions();
     syncLocationOptions();
     var hero=document.getElementById('source-meta');
-    if(hero)hero.textContent='Nationwide search · '+medi.hospitals.length.toLocaleString('en-IN')+' Medi Assist records (API '+networkiqDate(medi.metadata.snapshot_retrieved_at_utc)+') + '+icici.hospitals.length.toLocaleString('en-IN')+' ICICI Lombard search listings (captured through '+networkiqDate(icici.metadata.observed_through_utc)+') + '+indus.hospitals.length.toLocaleString('en-IN')+' IndusInd source listings (API '+networkiqDate(indus.metadata.retrieved_at_utc)+', IPD/OPD distinguished). These are source records, not unique hospitals. Verify current policy-specific cashless eligibility with insurer/TPA.';
+    if(hero)hero.textContent='Nationwide search · '+medi.hospitals.length.toLocaleString('en-IN')+' Medi Assist records (API '+networkiqDate(medi.metadata.snapshot_retrieved_at_utc)+') + '+icici.hospitals.length.toLocaleString('en-IN')+' ICICI Lombard search listings (captured through '+networkiqDate(icici.metadata.observed_through_utc)+') + '+indus.hospitals.length.toLocaleString('en-IN')+' IndusInd source listings (API '+networkiqDate(indus.metadata.retrieved_at_utc)+', IPD/OPD distinguished). Care Health '+care.hospitals.length.toLocaleString('en-IN')+' public-locator search records (partial state coverage; policy-specific eligibility not verified). These are source records, not unique hospitals. Verify current policy-specific cashless eligibility with insurer/TPA.';
     buildKPI();applyF();
   }).catch(function(err){
     console.error('Network data could not be loaded',err);
@@ -579,5 +612,6 @@ function loadCurrentNetwork(){
 
 loadCurrentNetwork();
 </script>
+<script src="./our_hospitals.js?v=1"></script>
 </body>
 </html>
