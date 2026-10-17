@@ -99,6 +99,8 @@ body{font-family:'Inter',sans-serif;background:#f0f2f5;color:#1a1a2e;min-height:
 <link rel="stylesheet" href="./our_hospitals.css?v=1">
 <!-- NETWORKIQ_CARE_UI_REFINEMENT_V2_20261017 -->
 <link rel="stylesheet" href="./care_ui_refinement.css?v=2">
+<!-- NETWORKIQ_NIVA_FIFTH_SOURCE_KPI_V1_20261017 -->
+<link rel="stylesheet" href="./niva_kpi_refinement.css?v=1">
 </head>
 <body>
 <!-- NETWORKIQ_OUR_HOSPITALS_PUBLIC_20261017 -->
@@ -144,6 +146,7 @@ body{font-family:'Inter',sans-serif;background:#f0f2f5;color:#1a1a2e;min-height:
         <option value="ICICI Lombard">ICICI Lombard</option>
         <option value="IndusInd General Insurance">IndusInd General Insurance</option>
         <option value="Care Health">Care Health</option>
+        <option value="Niva Bupa">Niva Bupa</option>
       </select>
       <select class="ss" id="q-state" onchange="onStateChange()"><option value="">All States</option></select>
       <select class="ss" id="q-city" onchange="applyF()"><option value="">All Cities</option></select>
@@ -326,9 +329,38 @@ function niqCareFilterSetup(){
  var ppn=document.getElementById('q-ppn');
  if(ppn){
    var ppnLabel=ppn.closest('.ppn-lbl')||ppn.parentElement;
-   if(ppnLabel)ppnLabel.hidden=show;
-   if(show&&ppn.checked)ppn.checked=false;
+   if(ppnLabel)ppnLabel.hidden=(show||!!source.value&&source.value!=='Niva Bupa'&&source.value!=='Medi Assist');
+   if((show||!!source.value&&source.value!=='Niva Bupa'&&source.value!=='Medi Assist')&&ppn.checked)ppn.checked=false;
  }
+}
+
+
+// KPI subtitles are source-specific. A Care public listing is not a PPN count.
+function niqKpiShortLabel(n, allIndia, st){
+  var source=document.getElementById('q-source').value;
+  if(source==='Niva Bupa')return (allIndia?'Niva Bupa':st)+' · '+n.toLocaleString('en-IN')+' PPN';
+  if(source==='Medi Assist')return (allIndia?'Medi Assist':st)+' · '+n.toLocaleString('en-IN')+' PPN';
+  if(allIndia)return source==='Care Health'?'Care locator':(source?source+' listings':'Source listings');
+  return st||'Location not supplied';
+}
+function niqSourceFootnote(r){
+  if(r.source==='Niva Bupa')return '<div class="niq-care-footnote">Niva Bupa API listing · Policy-specific eligibility not verified</div>';
+  return '';
+}
+function niqValidateNiva(source){
+  if(!source || !source.metadata || !Array.isArray(source.hospitals))throw Error('Niva file is missing required metadata or hospitals');
+  var m=source.metadata;
+  if(m.source_name!=='Niva Bupa'||m.complete!==true||m.policy_specific_cashless_eligibility_verified!==false)
+    throw Error('Unverified Niva metadata');
+  if(source.hospitals.length<10000||m.source_count!==source.hospitals.length||m.pages_captured!==m.source_pages)
+    throw Error('Niva record/page completeness check failed');
+  var ids=new Set();
+  source.hospitals.forEach(function(r){
+    if(!r.id||!r.name||!r.address||!r.city||!r.pin||ids.has(r.id))throw Error('Niva has duplicate/missing identity');
+    ids.add(r.id);
+    if(typeof r.ppn!=='boolean')throw Error('Niva PPN flag is not boolean');
+  });
+  return source;
 }
 
 function buildKPI(){
@@ -346,9 +378,9 @@ function buildKPI(){
     cnt.set(k,entry);
   });
   KPI_CITIES=Array.from(cnt.values()).sort(function(a,b){return b.count-a.count;}).slice(0,12);
-  var html='<div class="kc active" id="kc-All" onclick="fcity(this)"><div class="kc-name">All India</div><div class="kc-num">'+kpiRows.length.toLocaleString()+'</div><div class="kc-ppn">'+esc(niqPpnKpiText(ppnTotal))+'</div></div>';
+  var html='<div class="kc active" id="kc-All" onclick="fcity(this)"><div class="kc-name">All India</div><div class="kc-num">'+kpiRows.length.toLocaleString()+'</div><div class="kc-ppn">'+esc(niqKpiShortLabel(ppnTotal,true,''))+'</div></div>';
   KPI_CITIES.forEach(function(item,i){
-    html+='<div class="kc" id="kc-'+i+'" onclick="fcity(this)"><div class="kc-name">'+esc(item.city)+'</div><div class="kc-num">'+item.count.toLocaleString()+'</div><div class="kc-ppn">'+esc(item.state)+' · '+esc(niqPpnKpiText(item.ppn))+'</div></div>';
+    html+='<div class="kc" id="kc-'+i+'" title="'+esc(item.city+', '+item.state)+'" onclick="fcity(this)"><div class="kc-name">'+esc(item.city)+'</div><div class="kc-num">'+item.count.toLocaleString()+'</div><div class="kc-ppn">'+esc(niqKpiShortLabel(item.ppn,false,item.state))+'</div></div>';
   });
   document.getElementById('kpi-strip').innerHTML=html;
   document.getElementById('total-badge').textContent=DATA.length.toLocaleString()+' Hospitals';
@@ -417,7 +449,7 @@ function render(){
   var slice=filtered.slice((page-1)*PS,page*PS);
   var city=document.getElementById('q-city').value;
   var selectedSource=document.getElementById('q-source').value;
-  document.getElementById('res-cnt').textContent=total.toLocaleString()+' source listings'+(selectedSource==='Care Health'?' · Care public locator · policy eligibility not verified':(selectedSource==='IndusInd General Insurance'&&city?' · Some source locations have unverified cities':''));
+  document.getElementById('res-cnt').textContent=total.toLocaleString()+' source listings'+(selectedSource==='Care Health'?' · Care public locator · policy eligibility not verified':(selectedSource==='Niva Bupa'?' · Niva public API listings · policy eligibility not verified':(selectedSource==='IndusInd General Insurance'&&city?' · Some source locations have unverified cities':'')));
   document.getElementById('res-title').textContent=city?city+' Hospitals':'All Hospitals';
   document.getElementById('pg-info').textContent='Page '+page+' of '+pages+' ('+total.toLocaleString()+' results)';
   document.getElementById('pg-prev').disabled=(page<=1);
@@ -456,12 +488,12 @@ function render(){
       insTxt='<span class="ins-empty">No insurer list provided by the source</span>';
     }
     var ph=(r.phone&&r.phone!=='nan'&&r.phone.length>3)?r.phone:'';
-    var cardHtml='<div class="hcard'+(r.ppn?' ppn':'')+(r.source==='Care Health'?' niq-care-card':'')+'">'+
+    var cardHtml='<div class="hcard'+(r.ppn?' ppn':'')+((r.source==='Care Health'||r.source==='Niva Bupa')?' niq-care-card':'')+(r.source==='Niva Bupa'?' niq-niva-card':'')+'">'+
       '<div class="ctop">'+
         '<div class="cname">'+niqHospitalDisplayName(r)+'</div>'+
         '<div class="cbadges">'+
        '<span class="badge" style="background:#e0e7ff;color:#3730a3">'+esc(r.source||'Unknown source')+'</span>'+
-       (r.source==='IndusInd General Insurance'&&r.network_type?'<span class="badge" style="background:#e0f2fe;color:#075985">'+esc(r.network_type)+'</span>':'')+
+       ((r.source==='IndusInd General Insurance'||r.source==='Niva Bupa')&&r.network_type?'<span class="badge" style="background:#e0f2fe;color:#075985">'+esc(r.network_type)+'</span>':'')+
        (r.source==='Care Health'?niqCareBadges(r):'')+
           (r.ppn?'<span class="badge ppn">&#10003; PPN</span>':'')+
           '<span class="badge city" style="background:'+col+'18;color:'+col+'">'+esc(r.city||(r.search_city?r.search_city+' (PIN matched)':'City not provided'))+', '+esc(r.state||'State not provided')+'</span>'+
@@ -472,8 +504,9 @@ function render(){
       (r.pin&&r.pin!=='nan'&&r.pin.length>2?'<div class="cdet"><span class="cico">&#128206;</span>PIN '+esc(r.pin)+'</div>':'')+
       (r.rating>0?'<div class="cdet"><span class="cico">&#11088;</span>'+r.rating.toFixed(1)+' / 5.0</div>':'')+
       (specs?'<div class="spwrap">'+specs+'</div>':'')+
-      (insTxt&&r.source!=='Care Health'?'<div class="inssec"><div class="inslbl">'+(r.source==='ICICI Lombard'?'ICICI Lombard search directory — verify policy eligibility':(r.source==='IndusInd General Insurance'?'IndusInd General Insurance source listing — verify policy eligibility':(r.source==='Care Health'?'Care Health public locator (plan eligibility unverified)':'Insurers listed by Medi Assist')))+' ('+insArr.length+')</div>'+insTxt+'</div>':'')+
+      (insTxt&&r.source!=='Care Health'&&r.source!=='Niva Bupa'?'<div class="inssec"><div class="inslbl">'+(r.source==='ICICI Lombard'?'ICICI Lombard search directory — verify policy eligibility':(r.source==='IndusInd General Insurance'?'IndusInd General Insurance source listing — verify policy eligibility':(r.source==='Care Health'?'Care Health public locator (plan eligibility unverified)':'Insurers listed by Medi Assist')))+' ('+insArr.length+')</div>'+insTxt+'</div>':'')+
       (r.source==='Care Health'?'<div class="niq-care-footnote">Care directory listing · Verify policy/plan eligibility</div>':'')+
+      niqSourceFootnote(r)+
     '</div>';
     html+=cardHtml;
   });
@@ -589,8 +622,8 @@ function networkiqRows(rows,source){
     x.phone=x.phone||'';
     x.spec=x.spec||'';
     x.rating=Number(x.rating)||0;
-    x.ppn=source==='Medi Assist'&&r.ppn===true;
-    x.ppn_insurers=source==='Medi Assist'&&Array.isArray(r.ppn_insurers)?r.ppn_insurers:[];
+    x.ppn=(source==='Medi Assist'||source==='Niva Bupa')&&r.ppn===true;
+    x.ppn_insurers=(source==='Medi Assist'||source==='Niva Bupa')&&Array.isArray(r.ppn_insurers)?r.ppn_insurers:[];
     x.ins=x.ins||'';
     x.ins_count=Number(x.ins_count)||0;
     return x;
@@ -655,9 +688,15 @@ function loadCurrentNetwork(){
     }),
     fetch('./data/care_health.json',{cache:'no-store'}).then(function(res){
       if(!res.ok)throw new Error('Care Health file HTTP '+res.status);return res.json();
+    }),
+    fetch('./data/niva_bupa.json',{cache:'no-store'}).then(function(res){
+      if(!res.ok)throw new Error('Niva Bupa file HTTP '+res.status);return res.json();
+    }).then(niqValidateNiva).catch(function(err){
+      console.error('Niva source excluded; other sources remain available',err);
+      return null;
     })
   ]).then(function(parts){
-    var medi=parts[0], icici=parts[1], indus=parts[2], care=parts[3];
+    var medi=parts[0], icici=parts[1], indus=parts[2], care=parts[3], niva=parts[4];
     if(!Array.isArray(medi.hospitals)||medi.hospitals.length<20000||!medi.metadata||medi.metadata.scope!=='nationwide')
       throw new Error('Missing or incomplete Medi Assist nationwide dataset');
     if(!Array.isArray(icici.hospitals)||icici.hospitals.length<14000||!icici.metadata||icici.metadata.verification_level!=='OFFICIAL_SEARCH_RESULT_ONLY'||icici.hospitals.length!==icici.metadata.record_count)
@@ -666,13 +705,13 @@ function loadCurrentNetwork(){
       throw new Error('Missing or incomplete IndusInd nationwide snapshot');
     if(!care.metadata || care.metadata.source_name!=='Care Health' || !Array.isArray(care.hospitals) || care.hospitals.length<1000 || care.metadata.state_attributed_hospital_rows!==care.hospitals.length || care.metadata.policy_specific_cashless_eligibility_verified!==false)
       throw new Error('Missing or unverifiable Care Health staging snapshot');
-    DATA=networkiqRows(medi.hospitals,'Medi Assist').concat(networkiqRows(icici.hospitals,'ICICI Lombard'),networkiqRows(indus.hospitals,'IndusInd General Insurance'),networkiqRows(care.hospitals,'Care Health'));
+    DATA=networkiqRows(medi.hospitals,'Medi Assist').concat(networkiqRows(icici.hospitals,'ICICI Lombard'),networkiqRows(indus.hospitals,'IndusInd General Insurance'),networkiqRows(care.hospitals,'Care Health'),(niva?networkiqRows(niva.hospitals,'Niva Bupa'):[]));
     networkiqApplyLocationEvidence();
     filtered=DATA.slice();
     syncFilterOptions();
     syncLocationOptions();
     var hero=document.getElementById('source-meta');
-    if(hero)hero.textContent='Nationwide search · '+medi.hospitals.length.toLocaleString('en-IN')+' Medi Assist records (API '+networkiqDate(medi.metadata.snapshot_retrieved_at_utc)+') + '+icici.hospitals.length.toLocaleString('en-IN')+' ICICI Lombard search listings (captured through '+networkiqDate(icici.metadata.observed_through_utc)+') + '+indus.hospitals.length.toLocaleString('en-IN')+' IndusInd source listings (API '+networkiqDate(indus.metadata.retrieved_at_utc)+', IPD/OPD distinguished). Care Health '+care.hospitals.length.toLocaleString('en-IN')+' public-locator search records (partial state coverage; policy-specific eligibility not verified). These are source records, not unique hospitals. Verify current policy-specific cashless eligibility with insurer/TPA.';
+    if(hero)hero.textContent='Nationwide search · '+medi.hospitals.length.toLocaleString('en-IN')+' Medi Assist records (API '+networkiqDate(medi.metadata.snapshot_retrieved_at_utc)+') + '+icici.hospitals.length.toLocaleString('en-IN')+' ICICI Lombard search listings (captured through '+networkiqDate(icici.metadata.observed_through_utc)+') + '+indus.hospitals.length.toLocaleString('en-IN')+' IndusInd source listings (API '+networkiqDate(indus.metadata.retrieved_at_utc)+', IPD/OPD distinguished). Care Health '+care.hospitals.length.toLocaleString('en-IN')+' public-locator search records (partial state coverage; policy-specific eligibility not verified). '+(niva?' Niva Bupa '+niva.hospitals.length.toLocaleString('en-IN')+' official API records ('+networkiqDate(niva.metadata.captured_utc)+', scope not independently verified).':' Niva Bupa feed temporarily unavailable.')+' These are source records, not unique hospitals. Verify current policy-specific cashless eligibility with insurer/TPA.';
     buildKPI();applyF();
   }).catch(function(err){
     console.error('Network data could not be loaded',err);

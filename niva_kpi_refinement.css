@@ -1,0 +1,10 @@
+/* NetworkIQ KPI fix: confine subtitles to tiles; never overlap neighbouring cities. */
+.kpi-strip{display:flex;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;scroll-snap-type:x proximity;overscroll-behavior-x:contain}
+.kc{flex:0 0 154px;min-width:154px;max-width:154px;min-height:78px;padding:12px 11px 10px;scroll-snap-align:start;overflow:hidden}
+.kc-name{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;line-height:1.35}
+.kc-num{font-variant-numeric:tabular-nums;line-height:1.25;font-size:20px}
+.kc-ppn{display:block;max-width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;line-height:1.5;letter-spacing:0;}
+.niq-niva-card .cname{text-transform:none}
+.niq-niva-card .badge.ppn{background:#dcfce7;color:#15803d}
+.niq-niva-card .niq-care-footnote{color:#64748b}
+@media(max-width:640px){.kc{flex-basis:128px;min-width:128px;max-width:128px;min-height:72px;padding:10px 9px}.kc-num{font-size:18px}.kc-ppn{font-size:9px}}
