@@ -97,6 +97,8 @@ body{font-family:'Inter',sans-serif;background:#f0f2f5;color:#1a1a2e;min-height:
 .ins-empty{font-size:10px;color:#94a3b8}
 </style>
 <link rel="stylesheet" href="./our_hospitals.css?v=1">
+<!-- NETWORKIQ_CARE_UI_REFINEMENT_V2_20261017 -->
+<link rel="stylesheet" href="./care_ui_refinement.css?v=2">
 </head>
 <body>
 <!-- NETWORKIQ_OUR_HOSPITALS_PUBLIC_20261017 -->
@@ -266,6 +268,69 @@ var CC={
 };
 
 var KPI_CITIES=[];
+
+// Care network codes are SOURCE CATEGORIES, not a guarantee of policy eligibility.
+const NIQ_CARE_CATEGORIES = [
+ ['NL_SMARTSELECT', 'Smart Select'],
+ ['NL_CARESUPREME_ULTIMATECARE_SMARTSELECT', 'Supreme / Ultimate Smart Select'],
+ ['NL_GRAMIN', 'Gramin'],
+ ['NL_SURGICAL', 'Surgical'],
+ ['NL_GIC_COMMON_EMPANELLED', 'GIC common panel'],
+ ['NL_CORPORATE', 'Corporate'],
+ ['NL_VFM', 'VFM']
+];
+function niqCareCodeLabel(code){
+ var x=NIQ_CARE_CATEGORIES.find(function(v){return v[0]===code;});
+ return x?x[1]:String(code||'Unclassified');
+}
+function niqHospitalDisplayName(r){
+ var s=String(r.name||'').trim().replace(/\s+/g,' ');
+ if(r.source!=='Care Health')return esc(s);
+ // Presentation formatting only; retain the original hospital_name and search values.
+ s=s.replace(/\b[a-z]/g,function(c){return c.toUpperCase();});
+ s=s.replace(/\bAiims\b/g,'AIIMS').replace(/\bHcmct\b/g,'HCMCT').replace(/\bNabh\b/g,'NABH');
+ return esc(s);
+}
+function niqCareBadges(r){
+ var raw=Array.isArray(r.care_category_codes)?r.care_category_codes:[];
+ if(!raw.length){return '<span class="badge niq-category-unknown">Product network not specified</span>';}
+ var visible=raw.slice(0,2).map(function(code){
+   return '<span class="badge niq-care-category" title="Original category: '+esc(code)+'">'+esc(niqCareCodeLabel(code))+'</span>';
+ }).join('');
+ if(raw.length>2){
+   visible+='<span class="badge niq-care-more" title="'+esc(raw.slice(2).map(niqCareCodeLabel).join(' | '))+'">+'+(raw.length-2)+' more</span>';
+ }
+ return visible;
+}
+function niqPpnKpiText(n){
+ var src=document.getElementById('q-source').value;
+ if(src==='Medi Assist'||!src)return n.toLocaleString('en-IN')+' Medi Assist PPN';
+ return src==='Care Health'?'Care public locator':'Source listings';
+}
+function niqCareFilterSetup(){
+ var source=document.getElementById('q-source');
+ if(!source)return;
+ var f=document.getElementById('niq-care-category');
+ if(!f){
+   f=document.createElement('select');f.id='niq-care-category';f.className='ss niq-care-filter';
+   f.setAttribute('aria-label','Care product network category');
+   f.innerHTML='<option value="">All Care network categories</option>'+
+     NIQ_CARE_CATEGORIES.map(function(x){return '<option value="'+esc(x[0])+'">'+esc(x[1])+'</option>';}).join('')+
+     '<option value="__UNKNOWN__">Category not specified</option>';
+   source.parentNode.insertBefore(f,source.nextSibling);
+   f.addEventListener('change',function(){applyF();});
+ }
+ var show=source.value==='Care Health';
+ f.hidden=!show;f.disabled=!show;
+ if(!show)f.value='';
+ var ppn=document.getElementById('q-ppn');
+ if(ppn){
+   var ppnLabel=ppn.closest('.ppn-lbl')||ppn.parentElement;
+   if(ppnLabel)ppnLabel.hidden=show;
+   if(show&&ppn.checked)ppn.checked=false;
+ }
+}
+
 function buildKPI(){
   var cnt=new Map(), ppnTotal=0;
   var selectedSource=document.getElementById('q-source').value;
@@ -281,9 +346,9 @@ function buildKPI(){
     cnt.set(k,entry);
   });
   KPI_CITIES=Array.from(cnt.values()).sort(function(a,b){return b.count-a.count;}).slice(0,12);
-  var html='<div class="kc active" id="kc-All" onclick="fcity(this)"><div class="kc-name">All India</div><div class="kc-num">'+kpiRows.length.toLocaleString()+'</div><div class="kc-ppn">'+ppnTotal+' PPN</div></div>';
+  var html='<div class="kc active" id="kc-All" onclick="fcity(this)"><div class="kc-name">All India</div><div class="kc-num">'+kpiRows.length.toLocaleString()+'</div><div class="kc-ppn">'+esc(niqPpnKpiText(ppnTotal))+'</div></div>';
   KPI_CITIES.forEach(function(item,i){
-    html+='<div class="kc" id="kc-'+i+'" onclick="fcity(this)"><div class="kc-name">'+esc(item.city)+'</div><div class="kc-num">'+item.count.toLocaleString()+'</div><div class="kc-ppn">'+esc(item.state)+' · '+item.ppn+' PPN</div></div>';
+    html+='<div class="kc" id="kc-'+i+'" onclick="fcity(this)"><div class="kc-name">'+esc(item.city)+'</div><div class="kc-num">'+item.count.toLocaleString()+'</div><div class="kc-ppn">'+esc(item.state)+' · '+esc(niqPpnKpiText(item.ppn))+'</div></div>';
   });
   document.getElementById('kpi-strip').innerHTML=html;
   document.getElementById('total-badge').textContent=DATA.length.toLocaleString()+' Hospitals';
@@ -322,9 +387,14 @@ function applyF(){
   var source=document.getElementById('q-source').value;
   var spec=document.getElementById('q-spec').value.toLowerCase();
   var ins=document.getElementById('q-ins').value.toLowerCase();
+  niqCareFilterSetup();
+  var careCategory=document.getElementById('niq-care-category');
+  var careSelected=source==='Care Health'&&careCategory?careCategory.value:'';
   var ppnOnly=document.getElementById('q-ppn').checked;
   filtered=DATA.filter(function(r){
     if(source&&r.source!==source)return false;
+    if(careSelected==='__UNKNOWN__'&&r.source==='Care Health'&&Array.isArray(r.care_category_codes)&&r.care_category_codes.length)return false;
+    if(careSelected&&careSelected!=='__UNKNOWN__'&&r.source==='Care Health'&&(!Array.isArray(r.care_category_codes)||r.care_category_codes.indexOf(careSelected)<0))return false;
     if(state&&r.state!==state)return false;
     if(city&&(r.search_city||r.city)!==city)return false;
     if(ppnOnly){if(ins){if(!(r.ppn_insurers||[]).some(function(n){return n.toLowerCase()===ins;}))return false;}else if(!r.ppn)return false;}
@@ -346,7 +416,8 @@ function render(){
   var pages=Math.max(1,Math.ceil(total/PS));
   var slice=filtered.slice((page-1)*PS,page*PS);
   var city=document.getElementById('q-city').value;
-  document.getElementById('res-cnt').textContent=total.toLocaleString()+' hospitals found'+(city?' · IndusInd locations with missing/unverifiable city may be absent from city-filtered results':'');
+  var selectedSource=document.getElementById('q-source').value;
+  document.getElementById('res-cnt').textContent=total.toLocaleString()+' source listings'+(selectedSource==='Care Health'?' · Care public locator · policy eligibility not verified':(selectedSource==='IndusInd General Insurance'&&city?' · Some source locations have unverified cities':''));
   document.getElementById('res-title').textContent=city?city+' Hospitals':'All Hospitals';
   document.getElementById('pg-info').textContent='Page '+page+' of '+pages+' ('+total.toLocaleString()+' results)';
   document.getElementById('pg-prev').disabled=(page<=1);
@@ -385,13 +456,13 @@ function render(){
       insTxt='<span class="ins-empty">No insurer list provided by the source</span>';
     }
     var ph=(r.phone&&r.phone!=='nan'&&r.phone.length>3)?r.phone:'';
-    var cardHtml='<div class="hcard'+(r.ppn?' ppn':'')+'">'+
+    var cardHtml='<div class="hcard'+(r.ppn?' ppn':'')+(r.source==='Care Health'?' niq-care-card':'')+'">'+
       '<div class="ctop">'+
-        '<div class="cname">'+esc(r.name)+'</div>'+
+        '<div class="cname">'+niqHospitalDisplayName(r)+'</div>'+
         '<div class="cbadges">'+
        '<span class="badge" style="background:#e0e7ff;color:#3730a3">'+esc(r.source||'Unknown source')+'</span>'+
        (r.source==='IndusInd General Insurance'&&r.network_type?'<span class="badge" style="background:#e0f2fe;color:#075985">'+esc(r.network_type)+'</span>':'')+
-       (r.source==='Care Health'?'<span class="badge" style="background:#fff3df;color:#965a13">'+(Array.isArray(r.care_category_codes)&&r.care_category_codes.length?r.care_category_codes.map(esc).join(', '):'Product network unknown')+'</span>':'')+
+       (r.source==='Care Health'?niqCareBadges(r):'')+
           (r.ppn?'<span class="badge ppn">&#10003; PPN</span>':'')+
           '<span class="badge city" style="background:'+col+'18;color:'+col+'">'+esc(r.city||(r.search_city?r.search_city+' (PIN matched)':'City not provided'))+', '+esc(r.state||'State not provided')+'</span>'+
         '</div>'+
@@ -401,7 +472,8 @@ function render(){
       (r.pin&&r.pin!=='nan'&&r.pin.length>2?'<div class="cdet"><span class="cico">&#128206;</span>PIN '+esc(r.pin)+'</div>':'')+
       (r.rating>0?'<div class="cdet"><span class="cico">&#11088;</span>'+r.rating.toFixed(1)+' / 5.0</div>':'')+
       (specs?'<div class="spwrap">'+specs+'</div>':'')+
-      (insTxt?'<div class="inssec"><div class="inslbl">'+(r.source==='ICICI Lombard'?'ICICI Lombard search directory — verify policy eligibility':(r.source==='IndusInd General Insurance'?'IndusInd General Insurance source listing — verify policy eligibility':(r.source==='Care Health'?'Care Health public locator (plan eligibility unverified)':'Insurers listed by Medi Assist')))+' ('+insArr.length+')</div>'+insTxt+'</div>':'')+
+      (insTxt&&r.source!=='Care Health'?'<div class="inssec"><div class="inslbl">'+(r.source==='ICICI Lombard'?'ICICI Lombard search directory — verify policy eligibility':(r.source==='IndusInd General Insurance'?'IndusInd General Insurance source listing — verify policy eligibility':(r.source==='Care Health'?'Care Health public locator (plan eligibility unverified)':'Insurers listed by Medi Assist')))+' ('+insArr.length+')</div>'+insTxt+'</div>':'')+
+      (r.source==='Care Health'?'<div class="niq-care-footnote">Care directory listing · Verify policy/plan eligibility</div>':'')+
     '</div>';
     html+=cardHtml;
   });

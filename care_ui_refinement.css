@@ -1,0 +1,17 @@
+/* Presentation-only Care directory v2; all original data and non-Care cards preserved */
+.niq-care-card{min-width:0;display:flex;flex-direction:column;padding:17px 19px 15px;overflow:hidden}
+.niq-care-card .ctop{display:flex;flex-direction:column;align-items:stretch;gap:10px;margin-bottom:11px}
+.niq-care-card .cname{display:block;flex:auto;font-size:15px;line-height:1.38;overflow-wrap:anywhere;letter-spacing:-.15px}
+.niq-care-card .cbadges{display:flex;max-width:100%;min-width:0;flex-direction:row;flex-wrap:wrap;justify-content:flex-start;align-items:center;flex-shrink:1;gap:5px}
+.niq-care-card .badge{font-size:9px;line-height:1.25;letter-spacing:0;max-width:100%;min-width:0;overflow-wrap:anywhere;white-space:normal;text-align:left;padding:4px 7px}
+.niq-care-card .niq-care-category{background:#fef3df;color:#8b4b0b;text-transform:none;font-weight:700;border:1px solid #f9e1bd}
+.niq-care-card .niq-care-more{background:#f1f5f9;color:#475569;text-transform:none}
+.niq-care-card .niq-category-unknown{background:#f1f5f9;color:#64748b;text-transform:none}
+.niq-care-card .caddr{font-size:12px;line-height:1.55;overflow-wrap:anywhere}
+.niq-care-card .cdet{font-family:inherit;font-size:11px;min-width:0;overflow-wrap:anywhere}
+.niq-care-card .sp{font-size:10px;padding:4px 8px}
+.niq-care-card .niq-care-footnote{margin-top:auto;padding-top:10px;font-size:10px;line-height:1.4;color:#697b91;border-top:1px solid #f1f5f9}
+#niq-care-category[hidden]{display:none!important}
+#niq-care-category{border-color:#f2ce99;background:#fffaf1;color:#6d4708;min-width:190px}
+@media(min-width:1160px){.hgrid{grid-template-columns:repeat(auto-fill,minmax(318px,1fr))}}
+@media(max-width:640px){.niq-care-card{padding:16px}.niq-care-card .cname{font-size:15px}}
