@@ -1,6 +1,13 @@
 name: Refresh Star Health official public directory
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/collect_star.py'
+      - 'scripts/validate_star.py'
+      - 'tests/test_star_v6.py'
+      - '.github/workflows/refresh-star.yml'
   schedule:
     - cron: '45 19 * * *' # daily 01:15 IST, sequential and rate-limited
 permissions:
@@ -19,6 +26,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Test Star collector offline before contacting API
+        run: python -B -m unittest discover -s tests -p 'test_star*.py' -q
       - name: Restore resumable Star state-category page checkpoints
         uses: actions/cache/restore@v4
         with:

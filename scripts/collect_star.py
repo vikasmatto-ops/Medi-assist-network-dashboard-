@@ -24,7 +24,7 @@ CATEGORIES=('Network','agreed','value_network','vsp','ayush','nonpreferred')
 SOURCE='Star Health'
 SOURCE_URL=base.PAGE
 MAX_PAGES=700
-MARKER='NETWORKIQ_STAR_V5'
+MARKER='NETWORKIQ_STAR_V6'
 # The public source has used differing geographic spellings. Never infer that a
 # failed name filter means zero hospitals; reconcile ALL category totals globally.
 STATE_ALIASES={
@@ -76,6 +76,14 @@ def parse_hospital_response(blob,page_size):
     if obj.get('errorDesc'):raise SourceError('Star Server Action errorDesc: '+str(obj['errorDesc'])[:180])
     code=str(obj.get('responseCode','<missing>'))
     description=norm(obj.get('description','<missing>'))[:90]
+    # Star's *observed* API contract: a genuine empty filter responds with
+    # 2012 / Provider Details Not Available / count=0 / details=[]. Do not
+    # treat other application errors, malformed data or nonzero counts as zero.
+    if code=='2012' and description.casefold()=='provider details not available':
+        raw_count=obj.get('count')
+        if str(raw_count)=='0' and obj.get('details')==[]:
+            return [],0,0
+        raise SourceError('Star empty-result status has inconsistent count/details')
     if code!='200' or description.lower()!='success':
         if code.startswith('5'):
             raise SourceError('Star backend failure: responseCode='+repr(code)+' description='+repr(description))
@@ -238,7 +246,7 @@ def collect_state_with_aliases(action,category,canonical,out,page_size=10,delay=
         try:
             rows,audit=collect_query(action,category,state,out,page_size,delay)
             audit['source_state_filter']=state
-            audit['status']='COMPLETE'
+            audit['status']='SOURCE_REPORTED_ZERO' if audit['count']==0 else 'COMPLETE'
             if audit['count']==0:
                 # A successful zero is evidence for this exact spelling only.
                 # Check known aliases before concluding the territory is empty.
@@ -273,6 +281,8 @@ def collect_state_with_aliases(action,category,canonical,out,page_size=10,delay=
                  'distinct':len(combined),'status':'UNVERIFIED_FILTER' if had_unresolved else 'COMPLETE',
                  'source_state_filter':used,'attempts':attempted}
     if verified_empty is not None:
+        # A successful Star 2012/0/[] is a *source-reported no-match* for this
+        # filter; no claim that the state has zero hospitals beyond this feed.
         return verified_empty
     # No data were fetched for this partition. It MUST NOT be assumed empty.
     # Caller may only approve if exact unfiltered national count reconciles.
@@ -299,7 +309,8 @@ def verify_source_state_filters(action, page_size=10, delay=.35):
             try:
                 rows,count,pages=page(action,'Network',st,1,page_size)
                 if count and not rows:raise SourceError('Empty page for positive count')
-                accepted.append({'name':st,'count':count,'page1':len(rows)})
+                accepted.append({'name':st,'count':count,'page1':len(rows),
+                                 'source_result':'SOURCE_REPORTED_ZERO' if count==0 else 'FOUND'})
                 # Do not stop after the first positive answer for combined territories,
                 # because the insurer may split the official 2020 union territory.
                 if canonical!='Dadra and Nagar Haveli and Daman and Diu' and count>0:break
@@ -317,7 +328,8 @@ def verify_source_state_filters(action, page_size=10, delay=.35):
                     failures.append({'status':'Both split territories not verified'})
                     accepted=[]
         if accepted:
-            found[canonical]={'status':'FILTER_ACCEPTED','accepted':accepted}
+            found[canonical]={'status':('SOURCE_REPORTED_ZERO' if all(x['count']==0 for x in accepted)
+                                      else 'FILTER_ACCEPTED'), 'accepted':accepted}
         else:
             unresolved[canonical]=failures or [{'status':'No accepted state filter'}]
         print('STAR_STATE_PREFLIGHT '+canonical+' '+
@@ -364,7 +376,10 @@ def collect(out,pilot_only=False,delay=.5,page_size=10):
             print('STAR_UNRESOLVED_STATES '+jdump(bad)[:8000],flush=True)
             raise SourceError('Official source state filters could not be verified: '+
                               ', '.join(bad)+'. No nationwide publication.')
-        print('STAR_ALL_STATE_FILTERS_ACCEPTED '+str(len(STATES)),flush=True)
+        report['source_zero_states']=[st for st,item in report['state_filter_preflight']['accepted'].items()
+                                      if item['status']=='SOURCE_REPORTED_ZERO']
+        print('STAR_ALL_STATE_FILTERS_ACCEPTED '+str(len(STATES))+
+              ' source_reported_zero='+jdump(report['source_zero_states']),flush=True)
         gathered={};category_counts=Counter();category_ids=defaultdict(set);unverified=[]
         for cat in CATEGORIES:
             for i,state in enumerate(STATES,1):
@@ -397,6 +412,8 @@ def collect(out,pilot_only=False,delay=.5,page_size=10):
             print(f'STAR_CATEGORY_STATE_PAGES_RECONCILED {cat}={counted}',flush=True)
         report['state_partitions_reconciled']=True
         report['unverified_state_filters']=[]
+        report['source_zero_queries']=[q for q,a in report['queries'].items()
+                                      if a.get('status')=='SOURCE_REPORTED_ZERO']
         if category_counts['Network']<5000:raise SourceError('Network count abnormally low; validate first')
         for category in CATEGORIES[1:]:
             if category_counts[category]==0:
@@ -415,6 +432,9 @@ def collect(out,pilot_only=False,delay=.5,page_size=10):
            'source_state_filter_preflight_passed':True,
            'national_totals_not_available':'Star requires state, city or hospital filter; no unfiltered national response',
            'unverified_state_filters':[],
+           'source_reported_zero_states':report['source_zero_states'],
+           'source_reported_zero_queries':report['source_zero_queries'],
+           'zero_result_meaning':'Star API 2012/Provider Details Not Available/count 0; no independently verified nationwide zero claim',
            'source_count':len(eligible),'excluded_count':len(excluded),'total_unique_across_categories':len(records),
            'policy_specific_cashless_eligibility_verified':False,
            'verified_page2_distinct':all(x.get('page2_distinct') for x in report['pilot'].values() if x['pages']>1),
@@ -428,7 +448,10 @@ def collect(out,pilot_only=False,delay=.5,page_size=10):
         report['complete']=True
         report['summary']={'source_count':len(eligible),'excluded_count':len(excluded),
             'raw_records_per_category':dict(category_counts),'unique_across_categories':len(records),
-            'unverified_state_filters':[],'state_partitions_reconciled':True}
+            'unverified_state_filters':[],
+            'source_reported_zero_states':report['source_zero_states'],
+            'source_reported_zero_queries':report['source_zero_queries'],
+            'state_partitions_reconciled':True}
         return report
     except Exception as exc:
         report['status']='FAILED_CLOSED'

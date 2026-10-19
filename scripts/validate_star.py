@@ -65,8 +65,20 @@ def validate(candidate,excluded,report,previous=None):
         raise ValueError('State-partition pagination reconciliation missing')
     if meta.get('source_state_filter_preflight_passed') is not True or meta.get('unverified_state_filters'):
         raise ValueError('Incomplete Star source-filter coverage')
-    if any(a.get('status') != 'COMPLETE' for a in audit_queries.values()):
+    if any(a.get('status') not in ('COMPLETE','SOURCE_REPORTED_ZERO') for a in audit_queries.values()):
         raise ValueError('Unverified Star source state/category filter in query audit')
+    for name,a in audit_queries.items():
+        if a.get('status')=='SOURCE_REPORTED_ZERO' and not (
+            a['count']==0 and a['captured']==0 and a['distinct']==0 and a['pages']==0):
+            raise ValueError('A source-reported-zero partition has positive records/pages: '+name)
+    zero_queries=sorted(name for name,a in audit_queries.items() if a.get('status')=='SOURCE_REPORTED_ZERO')
+    if sorted(meta.get('source_reported_zero_queries',[])) != zero_queries or sorted(report.get('source_zero_queries',[]))!=zero_queries:
+        raise ValueError('Source zero-status query provenance missing or inconsistent')
+    zero_states=sorted(st for st,item in preflight['accepted'].items() if item.get('status')=='SOURCE_REPORTED_ZERO')
+    if sorted(meta.get('source_reported_zero_states',[]))!=zero_states or sorted(report.get('source_zero_states',[]))!=zero_states:
+        raise ValueError('Source zero-status preflight provenance missing or inconsistent')
+    if meta.get('national_totals_not_available') != 'Star requires state, city or hospital filter; no unfiltered national response':
+        raise ValueError('Source completeness limitation not declared')
     if previous is not None:
         before=len(previous.get('hospitals',[]))
         if before>=5000 and not (.8*before<=len(rows)<=1.2*before):
