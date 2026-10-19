@@ -1,0 +1,52 @@
+name: Refresh Star Health official public directory
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '45 19 * * *' # daily 01:15 IST, sequential and rate-limited
+permissions:
+  contents: write
+concurrency:
+  group: networkiq-star-health
+  cancel-in-progress: false
+jobs:
+  fetch-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Restore resumable Star state-category page checkpoints
+        uses: actions/cache/restore@v4
+        with:
+          path: build/star/checkpoints
+          key: networkiq-star-pages-${{ github.run_id }}
+          restore-keys: |
+            networkiq-star-pages-
+      - name: Collect 216 Star query partitions by direct first-party POST
+        id: collect
+        run: python scripts/collect_star.py --out build/star --delay 0.6 --page-size 10
+      - name: Validate complete snapshot and prepare Star-only JSON outputs
+        if: steps.collect.outcome == 'success'
+        run: python scripts/validate_star.py --input build/star --live data
+      - name: Commit only both verified Star datasets
+        if: steps.collect.outcome == 'success'
+        run: |
+          git config user.name 'networkiq-automation'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/star_health.json data/star_health_excluded.json
+          if git diff --cached --quiet; then
+            echo 'No Star data changes'
+            exit 0
+          fi
+          git commit -m 'Refresh verified Star Health public hospital directory'
+          git push
+      - name: Save checkpoints for safe restart; never publish partial data
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: build/star/checkpoints
+          key: networkiq-star-pages-${{ github.run_id }}

@@ -1,0 +1,3 @@
+/* NetworkIQ Star source-only styling. No global theme overrides. */
+.niq-star-badge { background:#e8f5ef!important; color:#11634c!important; border:1px solid #d2e8df; }
+#niq-star-category[hidden] { display:none!important; }
