@@ -56,6 +56,10 @@ def validate(candidate,excluded,report,previous=None):
     counts=Counter({cat:sum(a['count'] for key,a in audit_queries.items() if key.startswith(cat+'|')) for cat in ALL_CATEGORIES})
     if dict(meta.get('raw_records_per_category',{}))!=dict(counts):
         raise ValueError('Per-category counts do not reconcile')
+    if meta.get('national_counts_reconciled') is not True or report.get('national_counts_reconciled') is not True:
+        raise ValueError('Unfiltered first-party national totals not reconciled')
+    if dict(meta.get('unfiltered_national_records_per_category',{}))!=dict(counts) or dict(report.get('national_category_counts',{}))!=dict(counts):
+        raise ValueError('National source counts do not agree with the completed state partitions')
     if previous is not None:
         before=len(previous.get('hospitals',[]))
         if before>=5000 and not (.8*before<=len(rows)<=1.2*before):
