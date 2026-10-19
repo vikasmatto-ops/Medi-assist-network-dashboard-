@@ -6,10 +6,8 @@ on:
     paths:
       - 'scripts/collect_star.py'
       - 'scripts/validate_star.py'
-      - 'tests/test_star_v6.py'
+      - 'tests/test_star_v7.py'
       - '.github/workflows/refresh-star.yml'
-  schedule:
-    - cron: '45 19 * * *' # daily 01:15 IST, sequential and rate-limited
 permissions:
   contents: write
 concurrency:
@@ -53,12 +51,14 @@ jobs:
           fi
           git commit -m 'Refresh verified Star Health public hospital directory'
           git push
-      - name: Preserve Star audit for diagnosis (never publishes partial hospitals)
+      - name: Preserve Star collection audit and public-source identity review
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: networkiq-star-audit
-          path: build/star/star_audit.json
+          path: |
+            build/star/star_audit.json
+            build/star/star_identity_review.json
           if-no-files-found: warn
           retention-days: 7
       - name: Save checkpoints for safe restart; never publish partial data

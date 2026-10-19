@@ -25,6 +25,7 @@ SOURCE='Star Health'
 SOURCE_URL=base.PAGE
 MAX_PAGES=700
 MARKER='NETWORKIQ_STAR_V6'
+PATCH_VERSION='V7_SOURCE_QUALITY_REVIEW'
 # The public source has used differing geographic spellings. Never infer that a
 # failed name filter means zero hospitals; reconcile ALL category totals globally.
 STATE_ALIASES={
@@ -128,31 +129,52 @@ def page(action,category,state,page_no,per_page=10):
     args=base.make_args(state=state,category=category,page=page_no,page_size=per_page)
     return source_action(action,args,per_page)
 
+IDENTITY_FIELDS=('hospitalName','address','cityName','stateName','pinCode')
+
+def source_issues(row,requested_state=None):
+    issues=[f'missing_{k}' for k in IDENTITY_FIELDS if not norm(row.get(k))]
+    pin=norm(row.get('pinCode'))
+    if pin and not re.fullmatch(r'\d{6}',pin):issues.append('invalid_pinCode')
+    source_state=norm(row.get('stateName'))
+    if requested_state and source_state and source_state_key(source_state)!=source_state_key(requested_state):
+        issues.append('state_mismatch')
+    return issues
+
 def raw_identity(row):
-    # Star does not expose a provider ID in the verified rescue response.
-    # Do not use phone/latitude alone as a facility ID.
-    values=[norm(row.get(x)).casefold() for x in ('hospitalName','address','cityName','stateName','pinCode')]
-    if not all(values):raise SourceError('Hospital missing name/address/city/state/PIN')
-    if not re.fullmatch(r'\d{6}',values[4]):raise SourceError('Invalid PIN '+repr(values[4]))
-    return digest(values)[:32]
+    values=[norm(row.get(k)).casefold() for k in IDENTITY_FIELDS]
+    if not source_issues(row):return digest(values)[:32]
+    # A quarantine-only stable identity: never invent missing location/name.
+    additional=[norm(row.get(k)).casefold() for k in
+                ('phoneNo','mobileNumber','latitude','longitude','hospitalType')]
+    return 'q_'+digest(values+additional)[:30]
 
 def make_record(row,category,requested_state):
     ident=raw_identity(row)
-    origin_state=norm(row['stateName'])
-    if source_state_key(origin_state)!=source_state_key(requested_state):
-        raise SourceError(f'Source state mismatch: requested {requested_state} returned {origin_state}')
+    issues=source_issues(row,requested_state)
+    if 'state_mismatch' in issues:
+        raise SourceError('Source state mismatch: '+norm(row.get('stateName'))+' vs '+requested_state)
+    raw_excluded=row.get('excludedHospital')
+    if not isinstance(raw_excluded,bool) and norm(raw_excluded).upper() not in (
+            'YES','Y','TRUE','1','NO','N','FALSE','0'):
+        issues.append('missing_or_invalid_exclusion_flag')
+    def safe_flag(key):
+        try:return yn(row.get(key))
+        except ValueError:
+            issues.append('invalid_flag_'+key)
+            return False
     flags={
-      'excluded':yn(row.get('excludedHospital')) or category=='nonpreferred',
-      'ayush':yn(row.get('ayushHospital')) or category=='ayush',
-      'vsp':yn(row.get('isVsp')) or yn(row.get('valuableserviceProvider')) or category=='vsp',
-      'pratham':yn(row.get('isPratham')),
-      'smart_network':yn(row.get('smartNetwork')),
-      'homecare':yn(row.get('homecareHospital')),
+      'excluded':safe_flag('excludedHospital') or category=='nonpreferred',
+      'ayush':safe_flag('ayushHospital') or category=='ayush',
+      'vsp':safe_flag('isVsp') or safe_flag('valuableserviceProvider') or category=='vsp',
+      'pratham':safe_flag('isPratham'),
+      'smart_network':safe_flag('smartNetwork'),
+      'homecare':safe_flag('homecareHospital'),
     }
-    return {
+    record={
       'id':'star_'+ident,'reference_id':ident,
-      'name':norm(row['hospitalName']),'address':norm(row['address']),
-      'city':norm(row['cityName']),'state':origin_state,'pin':norm(row['pinCode']),
+      'name':norm(row.get('hospitalName')),'address':norm(row.get('address')),
+      'city':norm(row.get('cityName')),'state':norm(row.get('stateName')),
+      'pin':norm(row.get('pinCode')),
       'phone':norm(row.get('phoneNo')) or norm(row.get('mobileNumber')),
       'latitude':norm(row.get('latitude')),'longitude':norm(row.get('longitude')),
       'network_type':norm(row.get('networkType')),
@@ -162,6 +184,11 @@ def make_record(row,category,requested_state):
       'ppn':False,'ppn_insurers':[],
       'policy_specific_cashless_eligibility_verified':False,
     }
+    if issues:
+        record['source_identity_issues']=sorted(set(issues))
+        record['source_review_row']=row
+        record['source_filter_for_review']=requested_state
+    return record
 
 def merge_records(dst,src):
     for key in ('id','name','address','city','state','pin'):
@@ -170,6 +197,10 @@ def merge_records(dst,src):
     for flag,val in src['star_flags'].items():dst['star_flags'][flag]=dst['star_flags'][flag] or val
     for key in ('phone','latitude','longitude','network_type','source_hospital_type'):
         if not dst[key]:dst[key]=src[key]
+    if src.get('source_identity_issues'):
+        dst['source_identity_issues']=sorted(set(dst.get('source_identity_issues',[])+src['source_identity_issues']))
+        dst['source_review_row']=src['source_review_row']
+        dst['source_filter_for_review']=src.get('source_filter_for_review','')
     return dst
 
 def write_atomic(path,data):
@@ -358,7 +389,7 @@ def pilot(action):
 
 def collect(out,pilot_only=False,delay=.5,page_size=10):
     out.mkdir(parents=True,exist_ok=True)
-    report={'version':MARKER,'source':SOURCE_URL,'captured_at_utc':utc(),'complete':False,
+    report={'version':MARKER,'patch':PATCH_VERSION,'source':SOURCE_URL,'captured_at_utc':utc(),'complete':False,
             'published':False,'status':'RUNNING','pilot':{},'queries':{},'errors':[]}
     try:
         action,asset=base.get_live_action_id()
@@ -388,6 +419,7 @@ def collect(out,pilot_only=False,delay=.5,page_size=10):
                     rows,audit=collect_state_with_aliases(action,cat,state,out,page_size,delay)
                 except Exception as exc:
                     report['errors'].append({'category':cat,'state':state,'error':str(exc)[:350]})
+                    print('STAR_PARTITION_STOP '+cat+'|'+state+' '+type(exc).__name__+': '+str(exc)[:250],file=sys.stderr,flush=True)
                     report['status']='PAUSED_INCOMPLETE_CHECKPOINTS'
                     return report
                 report['queries'][cat+'|'+state]=audit
@@ -415,9 +447,37 @@ def collect(out,pilot_only=False,delay=.5,page_size=10):
         report['source_zero_queries']=[q for q,a in report['queries'].items()
                                       if a.get('status')=='SOURCE_REPORTED_ZERO']
         if category_counts['Network']<5000:raise SourceError('Network count abnormally low; validate first')
+        # Star might report a legitimately empty subnetwork category. Only the
+        # exact API 2012/0/[] response in ALL 36 state partitions can prove it.
         for category in CATEGORIES[1:]:
-            if category_counts[category]==0:
-                raise SourceError(f'Category {category} returned zero nationwide; verify source routing before publication')
+            if category_counts[category]==0 and any(
+                r.get('status')!='SOURCE_REPORTED_ZERO'
+                for k,r in report['queries'].items() if k.startswith(category+'|')):
+                raise SourceError('Unverified zero-count category: '+category)
+        # Every source record is counted in per-page totals, even if Star did
+        # not supply its name, city or PIN. Quarantine source anomalies rather
+        # than invent fields, silently drop them or publish them as eligible.
+        quality=[{
+          'id':r['id'], 'issues':r['source_identity_issues'],
+          'categories':r['star_categories'],
+          'source_state_filter':r.get('source_filter_for_review'),
+          'public_source_row':r.get('source_review_row',{})
+        } for r in gathered.values() if r.get('source_identity_issues')]
+        report['source_identity_review_count']=len(quality)
+        report['source_identity_review_reasons']=dict(Counter(
+            issue for r in quality for issue in r['issues']))
+        if quality:
+            write_atomic(out/'star_identity_review.json',{
+              'kind':'STAR_PUBLIC_SOURCE_DATA_QUALITY_REVIEW',
+              'query_count':len(report['queries']),
+              'publication_permitted':False,
+              'source_record_issues':quality})
+            report['status']='PAUSED_SOURCE_DATA_QUALITY'
+            report['errors'].append({'stage':'identity_review',
+                'error':f'{len(quality)} source records have missing or invalid identity fields; all page data retained'})
+            print('STAR_DATA_QUALITY_REVIEW '+jdump(report['source_identity_review_reasons'])+
+                  '; complete audit artifact saved; NO PUBLISH',flush=True)
+            return report
         records=sorted(gathered.values(),key=lambda r:(r['state'],r['city'],r['name'],r['id']))
         eligible=[r for r in records if not r['star_flags']['excluded']]
         excluded=[r for r in records if r['star_flags']['excluded']]
