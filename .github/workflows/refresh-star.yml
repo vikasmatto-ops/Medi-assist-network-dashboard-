@@ -44,6 +44,14 @@ jobs:
           fi
           git commit -m 'Refresh verified Star Health public hospital directory'
           git push
+      - name: Preserve Star audit for diagnosis (never publishes partial hospitals)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: networkiq-star-audit
+          path: build/star/star_audit.json
+          if-no-files-found: warn
+          retention-days: 7
       - name: Save checkpoints for safe restart; never publish partial data
         if: always()
         uses: actions/cache/save@v4

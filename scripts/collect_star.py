@@ -226,7 +226,10 @@ def collect(out,pilot_only=False,delay=.5,page_size=10):
                 try:
                     rows,audit=collect_query(action,cat,state,out,page_size,delay)
                 except Exception as exc:
-                    report['errors'].append({'category':cat,'state':state,'error':str(exc)[:350]})
+                    # Fail closed, but show the *specific* query error in Actions logs.
+                    reason=(type(exc).__name__+': '+str(exc)).replace('\r',' ').replace('\n',' ')[:350]
+                    print('STAR_STOPPED category='+cat+' state='+state+' reason='+reason, file=sys.stderr, flush=True)
+                    report['errors'].append({'category':cat,'state':state,'error':reason})
                     report['status']='PAUSED_INCOMPLETE_CHECKPOINTS'
                     return report
                 report['queries'][cat+'|'+state]=audit
@@ -266,7 +269,9 @@ def collect(out,pilot_only=False,delay=.5,page_size=10):
         return report
     except Exception as exc:
         report['status']='FAILED_CLOSED'
-        report['errors'].append({'stage':'bootstrap_or_validation','error':repr(exc)[:500]})
+        reason=(type(exc).__name__+': '+str(exc)).replace('\r',' ').replace('\n',' ')[:350]
+        print('STAR_BOOTSTRAP_STOPPED reason='+reason, file=sys.stderr, flush=True)
+        report['errors'].append({'stage':'bootstrap_or_validation','error':reason})
         return report
     finally:
         write_atomic(out/'star_audit.json',report)
