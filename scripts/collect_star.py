@@ -24,7 +24,7 @@ CATEGORIES=('Network','agreed','value_network','vsp','ayush','nonpreferred')
 SOURCE='Star Health'
 SOURCE_URL=base.PAGE
 MAX_PAGES=700
-MARKER='NETWORKIQ_STAR_V4'
+MARKER='NETWORKIQ_STAR_V5'
 # The public source has used differing geographic spellings. Never infer that a
 # failed name filter means zero hospitals; reconcile ALL category totals globally.
 STATE_ALIASES={
@@ -98,6 +98,8 @@ def parse_hospital_response(blob,page_size):
     return records,count,pages
 
 def source_action(action,args,page_size,retries=2):
+    if not isinstance(args,list) or len(args)!=7 or not any(norm(x) for x in args[:3]):
+        raise SourceError('Star hospital API requires hospital name, city or state; blank nationwide query refused')
     payload=json.dumps(args,ensure_ascii=False,separators=(',',':')).encode()
     headers={'Next-Action':action,'Content-Type':'text/plain;charset=UTF-8','Accept':'text/x-component',
              'Origin':base.ROOT,'Referer':base.PAGE}
@@ -278,14 +280,51 @@ def collect_state_with_aliases(action,category,canonical,out,page_size=10,delay=
                'status':'UNVERIFIED_FILTER','source_state_filter':None,
                'attempts':attempted}
 
-def global_category_probe(action,category,page_size=10):
-    rows,total,pages=page(action,category,'',1,page_size)
-    if total<0 or (total and len(rows)!=min(total,page_size)):
-        raise SourceError('National category response truncated: '+category)
-    if pages!=math.ceil(total/page_size):
-        raise SourceError('National page count mismatch: '+category)
-    return {'count':total,'sample_ids':[raw_identity(row) for row in rows],
-            'pages':pages,'sample_size':len(rows)}
+def verify_source_state_filters(action, page_size=10, delay=.35):
+    """Request only valid state-filtered public API pages; NEVER query all blanks.
+
+    Capture every unresolved state, not just the first. Even if 35 succeed,
+    36th missing means no nationwide publication. This verifies label acceptance,
+    NOT a server-supplied nationwide record total (the API offers no such query).
+    """
+    found={}
+    unresolved={}
+    for canonical in STATES:
+        names=(canonical,)+STATE_ALIASES.get(canonical,())
+        if canonical=='Dadra and Nagar Haveli and Daman and Diu':
+            names+=('Dadra & Nagar Haveli','Dadra and Nagar Haveli','Daman & Diu','Daman and Diu')
+        accepted=[]; failures=[]
+        for st in dict.fromkeys(names):
+            if delay:time.sleep(max(0,delay))  # bounded first-party request rate
+            try:
+                rows,count,pages=page(action,'Network',st,1,page_size)
+                if count and not rows:raise SourceError('Empty page for positive count')
+                accepted.append({'name':st,'count':count,'page1':len(rows)})
+                # Do not stop after the first positive answer for combined territories,
+                # because the insurer may split the official 2020 union territory.
+                if canonical!='Dadra and Nagar Haveli and Daman and Diu' and count>0:break
+            except UnverifiedSourceStatus as e:
+                failures.append({'state':st,'status':str(e)[:200]})
+        # A combined UT split is complete only if BOTH constituent labels work,
+        # or the unsplit combined state filter itself returns positive records.
+        if canonical=='Dadra and Nagar Haveli and Daman and Diu' and accepted:
+            full={canonical,'Dadra & Nagar Haveli and Daman & Diu'}
+            accepted_labels={x['name'] for x in accepted if x['count']>0}
+            if not accepted_labels.intersection(full):
+                has_dadra=bool(accepted_labels.intersection({'Dadra & Nagar Haveli','Dadra and Nagar Haveli'}))
+                has_daman=bool(accepted_labels.intersection({'Daman & Diu','Daman and Diu'}))
+                if not (has_dadra and has_daman):
+                    failures.append({'status':'Both split territories not verified'})
+                    accepted=[]
+        if accepted:
+            found[canonical]={'status':'FILTER_ACCEPTED','accepted':accepted}
+        else:
+            unresolved[canonical]=failures or [{'status':'No accepted state filter'}]
+        print('STAR_STATE_PREFLIGHT '+canonical+' '+
+              ('ACCEPTED' if canonical in found else 'UNVERIFIED'),flush=True)
+    return {'accepted':found,'unresolved':unresolved,
+            'accepted_states':len(found),'expected_states':len(STATES),
+            'method':'Mandatory source state filters; unfiltered nationwide query is invalid'}
 
 def pilot(action):
     checked={}
@@ -317,11 +356,15 @@ def collect(out,pilot_only=False,delay=.5,page_size=10):
         if pilot_only:
             report['status']='PILOT_PAGE2_VERIFIED'
             return report
-        # First-party national totals guard against state names that do not
-        # match current dropdown values. Source errors NEVER become zero rows.
-        global_counts={cat:global_category_probe(action,cat,page_size) for cat in CATEGORIES}
-        report['national_category_counts']={k:v['count'] for k,v in global_counts.items()}
-        print('STAR_NATIONAL_COUNTS '+jdump(report['national_category_counts']),flush=True)
+        # Star rejects every API query with no hospital/city/state filter.
+        # Run source-state preflight instead of the impossible blank-state probe.
+        report['state_filter_preflight']=verify_source_state_filters(action,page_size)
+        bad=report['state_filter_preflight']['unresolved']
+        if bad:
+            print('STAR_UNRESOLVED_STATES '+jdump(bad)[:8000],flush=True)
+            raise SourceError('Official source state filters could not be verified: '+
+                              ', '.join(bad)+'. No nationwide publication.')
+        print('STAR_ALL_STATE_FILTERS_ACCEPTED '+str(len(STATES)),flush=True)
         gathered={};category_counts=Counter();category_ids=defaultdict(set);unverified=[]
         for cat in CATEGORIES:
             for i,state in enumerate(STATES,1):
@@ -343,27 +386,17 @@ def collect(out,pilot_only=False,delay=.5,page_size=10):
                     else:gathered[row['id']]=row
         if len(report['queries'])!=len(STATES)*len(CATEGORIES):
             raise SourceError('Incomplete category/state matrix')
+        # Per-state page and identity counts are verified by collect_query(),
+        # including the last page. Never conflate a source error with zero.
+        if unverified:
+            raise SourceError('Source state/category query filters unverified: '+str(unverified[:30]))
         for cat in CATEGORIES:
-            expected=global_counts[cat]['count']; observed=category_counts[cat]
-            if observed!=expected or len(category_ids[cat])!=expected:
-                raise SourceError('National count reconciliation FAILED '+cat+
-                    f': national={expected}, states={observed}, distinct={len(category_ids[cat])},'+
-                    ' unverifiable_filters='+str([x for x in unverified if x.startswith(cat+'|')])[:200])
-            missing=set('star_'+id_ for id_ in global_counts[cat]['sample_ids'])-category_ids[cat]
-            if missing:
-                raise SourceError('National first-page sample missing from state partitions: '+cat)
-            print(f'STAR_CATEGORY_RECONCILED {cat} national={expected} states={observed} distinct={len(category_ids[cat])}',flush=True)
-        # Guard against mid-run source churn. Re-read official unfiltered totals
-        # just before staging any publishable data.
-        for cat in CATEGORIES:
-            final=global_category_probe(action,cat,page_size)
-            if final['count']!=global_counts[cat]['count']:
-                raise SourceError('Star national total CHANGED during capture: '+cat+
-                                  f' {global_counts[cat]["count"]}->{final["count"]}; checkpoint and retry')
-            if set(final['sample_ids'])!=set(global_counts[cat]['sample_ids']):
-                raise SourceError('Star national first-page membership changed during capture: '+cat)
-        report['national_counts_reconciled']=True
-        report['unverified_state_filters']=unverified
+            counted=category_counts[cat]
+            if counted!=len(category_ids[cat]):
+                raise SourceError('Duplicate network records across state filters: '+cat)
+            print(f'STAR_CATEGORY_STATE_PAGES_RECONCILED {cat}={counted}',flush=True)
+        report['state_partitions_reconciled']=True
+        report['unverified_state_filters']=[]
         if category_counts['Network']<5000:raise SourceError('Network count abnormally low; validate first')
         for category in CATEGORIES[1:]:
             if category_counts[category]==0:
@@ -374,13 +407,14 @@ def collect(out,pilot_only=False,delay=.5,page_size=10):
         if len(eligible)<5000:raise SourceError('Eligible-source-listing count implausibly low')
         if not any(r['star_flags']['vsp'] for r in records):raise SourceError('No VSP flags found; verify source/category contract')
         m={'source_name':SOURCE,'source_url':SOURCE_URL,'captured_utc':utc(),
-           'complete':True,'network_scope':'All 36 states and union territories queried in all 6 source categories',
+           'complete':True,'network_scope':'All 36 geographic state/UT queries validated; independent national total unavailable from this API',
            'state_count':len(STATES),'states_queried':STATES,'categories_queried':list(CATEGORIES),
            'query_count':len(report['queries']),'expected_query_count':len(STATES)*len(CATEGORIES),
            'raw_records_per_category':dict(category_counts),
-           'unfiltered_national_records_per_category':report['national_category_counts'],
-           'national_counts_reconciled':True,
-           'unverified_state_filters':unverified,
+           'state_partitions_reconciled':True,
+           'source_state_filter_preflight_passed':True,
+           'national_totals_not_available':'Star requires state, city or hospital filter; no unfiltered national response',
+           'unverified_state_filters':[],
            'source_count':len(eligible),'excluded_count':len(excluded),'total_unique_across_categories':len(records),
            'policy_specific_cashless_eligibility_verified':False,
            'verified_page2_distinct':all(x.get('page2_distinct') for x in report['pilot'].values() if x['pages']>1),
@@ -394,11 +428,13 @@ def collect(out,pilot_only=False,delay=.5,page_size=10):
         report['complete']=True
         report['summary']={'source_count':len(eligible),'excluded_count':len(excluded),
             'raw_records_per_category':dict(category_counts),'unique_across_categories':len(records),
-            'unverified_state_filters':unverified,'unfiltered_counts_reconciled':True}
+            'unverified_state_filters':[],'state_partitions_reconciled':True}
         return report
     except Exception as exc:
         report['status']='FAILED_CLOSED'
-        report['errors'].append({'stage':'bootstrap_or_validation','error':repr(exc)[:500]})
+        reason=(type(exc).__name__+': '+str(exc))[:800]
+        print('STAR_BOOTSTRAP_STOPPED reason='+reason,file=sys.stderr,flush=True)
+        report['errors'].append({'stage':'bootstrap_or_validation','error':reason})
         return report
     finally:
         write_atomic(out/'star_audit.json',report)

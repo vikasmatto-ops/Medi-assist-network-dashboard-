@@ -43,10 +43,10 @@ class SafeStarV4(unittest.TestCase):
         self.assertEqual(meta['status'],'UNVERIFIED_FILTER')
         self.assertGreater(len(meta['attempts']),1)
 
-    def test_national_probe_refuses_truncated_first_page(self):
-        with patch.object(s,'page',return_value=([fake_row(0)],350,35)):
-            with self.assertRaisesRegex(s.SourceError,'truncated'):
-                s.global_category_probe('a','Network')
+    def test_blank_nationwide_filter_never_reaches_transport(self):
+        with patch.object(s.base,'fetch',side_effect=AssertionError('Network must not be called')):
+            with self.assertRaisesRegex(s.SourceError,'requires hospital name, city or state'):
+                s.source_action('action',s.base.make_args(),10)
 
     def test_validator_rejects_forged_national_counts(self):
         # Verify the new gate is mandatory, even if an old report otherwise says complete.
@@ -96,3 +96,46 @@ class SplitTerritories(unittest.TestCase):
             rows,audit=s.collect_state_with_aliases('a','Network','Andaman and Nicobar Islands',Path(t))
         self.assertEqual(len(rows),1)
         self.assertEqual(audit['source_state_filter'],'Andaman & Nicobar Island')
+
+class NationwideMandatoryGeography(unittest.TestCase):
+    def test_preflight_never_sends_empty_geographic_filter(self):
+        calls=[]
+        def fake(action,category,state,page_no,per_page=10):
+            self.assertTrue(state)
+            calls.append(state)
+            return [fake_row(1,state=state)],1,1
+        with patch.object(s,'page',side_effect=fake):
+            audit=s.verify_source_state_filters('a',delay=0)
+        self.assertEqual(audit['accepted_states'],36)
+        self.assertFalse(audit['unresolved'])
+        self.assertGreaterEqual(len(calls),36)
+
+    def test_invalid_state_filters_halt_without_publishing(self):
+        def fake(action,category,state,page_no,per_page=10):
+            if state.lower().startswith('andaman'):
+                raise s.UnverifiedSourceStatus('Unknown source state')
+            return [fake_row(1,state=state)],1,1
+        with patch.object(s,'page',side_effect=fake):
+            audit=s.verify_source_state_filters('a',delay=0)
+        self.assertIn('Andaman and Nicobar Islands',audit['unresolved'])
+        self.assertEqual(audit['accepted_states'],35)
+
+    def test_no_national_blank_query_in_collection(self):
+        def reject_empty(action,category,state,page_no,per_page=10):
+            if not state:raise AssertionError('Invalid blank state request')
+            return [fake_row(1,state=state)],1,1
+        with patch.object(s,'page',side_effect=reject_empty):
+            a=s.verify_source_state_filters('a',delay=0)
+        self.assertFalse(a['unresolved'])
+
+class SplitCoverageGuard(unittest.TestCase):
+    def test_one_split_territory_cannot_pass_preflight(self):
+        def fake(action,category,state,page_no,per_page=10):
+            if state in ('Dadra & Nagar Haveli','Dadra and Nagar Haveli'):
+                return [fake_row(1,state=state)],1,1
+            if state.lower().startswith('dadra') or state.lower().startswith('daman'):
+                raise s.UnverifiedSourceStatus('Unrecognised')
+            return [fake_row(1,state=state)],1,1
+        with patch.object(s,'page',side_effect=fake):
+            audit=s.verify_source_state_filters('a',delay=0)
+        self.assertIn('Dadra and Nagar Haveli and Daman and Diu',audit['unresolved'])

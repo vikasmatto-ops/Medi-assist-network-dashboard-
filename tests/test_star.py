@@ -160,9 +160,9 @@ class NationwideSimulated(unittest.TestCase):
             with (mockpatch.object(s.base,'get_live_action_id',return_value=('123'*14,'https://www.starhealth.in/current.js')),
                   mockpatch.object(s,'pilot',return_value=pilot_result),
                   mockpatch.object(s,'collect_state_with_aliases',side_effect=fake_query),
-                  mockpatch.object(s,'global_category_probe',side_effect=lambda action,cat,size: {
-                      'count': 7200 if cat=='Network' else 1,
-                      'sample_ids':[], 'pages':720 if cat=='Network' else 1, 'sample_size':0})):
+                  mockpatch.object(s,'verify_source_state_filters',return_value={
+                      'accepted':{k:{'status':'FILTER_ACCEPTED'} for k in s.STATES},
+                      'unresolved':{},'accepted_states':36,'expected_states':36})):
                 result=s.collect(path,delay=0,page_size=10)
             self.assertTrue(result['complete'],result['errors'])
             self.assertEqual(len(result['queries']),216)

@@ -56,10 +56,17 @@ def validate(candidate,excluded,report,previous=None):
     counts=Counter({cat:sum(a['count'] for key,a in audit_queries.items() if key.startswith(cat+'|')) for cat in ALL_CATEGORIES})
     if dict(meta.get('raw_records_per_category',{}))!=dict(counts):
         raise ValueError('Per-category counts do not reconcile')
-    if meta.get('national_counts_reconciled') is not True or report.get('national_counts_reconciled') is not True:
-        raise ValueError('Unfiltered first-party national totals not reconciled')
-    if dict(meta.get('unfiltered_national_records_per_category',{}))!=dict(counts) or dict(report.get('national_category_counts',{}))!=dict(counts):
-        raise ValueError('National source counts do not agree with the completed state partitions')
+    preflight=report.get('state_filter_preflight') or {}
+    if preflight.get('expected_states')!=36 or preflight.get('accepted_states')!=36 or preflight.get('unresolved'):
+        raise ValueError('Star state filters have unresolved territories')
+    if set(preflight.get('accepted',{}))!=set(meta.get('states_queried',[])):
+        raise ValueError('Star preflight geographic coverage differs from captured states')
+    if meta.get('state_partitions_reconciled') is not True or report.get('state_partitions_reconciled') is not True:
+        raise ValueError('State-partition pagination reconciliation missing')
+    if meta.get('source_state_filter_preflight_passed') is not True or meta.get('unverified_state_filters'):
+        raise ValueError('Incomplete Star source-filter coverage')
+    if any(a.get('status') != 'COMPLETE' for a in audit_queries.values()):
+        raise ValueError('Unverified Star source state/category filter in query audit')
     if previous is not None:
         before=len(previous.get('hospitals',[]))
         if before>=5000 and not (.8*before<=len(rows)<=1.2*before):
