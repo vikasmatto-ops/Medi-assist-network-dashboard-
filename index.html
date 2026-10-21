@@ -349,7 +349,7 @@ function niqKpiShortLabel(n, allIndia, st){
   return st||'Location not supplied';
 }
 function niqSourceFootnote(r){
-  if(r.source==='Star Health')return '<div class="niq-care-footnote">Star official directory · Listing is not policy-specific cashless approval</div>';
+  if(r.source==='Star Health')return '<div class="niq-care-footnote">Star official directory'+(r.source_city_missing===true?' · City not provided by Star':'')+' · Listing is not policy-specific cashless approval</div>';
   if(r.source==='Niva Bupa')return '<div class="niq-care-footnote">Niva Bupa API listing · Policy-specific eligibility not verified</div>';
   return '';
 }
@@ -363,14 +363,29 @@ function niqValidateStar(snapshot){
      !Array.isArray(m.categories_queried)||m.categories_queried.length!==6||
      m.verified_page2_distinct!==true||snapshot.hospitals.length<5000||m.source_count!==snapshot.hospitals.length)
      throw Error('Star completeness proof missing');
-  var ids=new Set();
+  var ids=new Set(), missingCity=0;
   snapshot.hospitals.forEach(function(r){
-    if(!r.id||!r.name||!r.address||!r.city||!r.state||!r.pin||ids.has(r.id)||
+    var cityBlank=!r.city;
+    if(cityBlank){
+      if(r.source_city_missing!==true||!Array.isArray(r.source_identity_issues)||
+         r.source_identity_issues.length!==1||r.source_identity_issues[0]!=='missing_cityName'||
+         !/^\d{6}$/.test(r.pin||'')||
+         !(Number(r.latitude)>=6&&Number(r.latitude)<=38.5&&Number(r.longitude)>=68&&Number(r.longitude)<=98.5))
+         throw Error('Star hospital city missing without source provenance');
+      missingCity++;
+    } else if(r.source_city_missing===true||r.source_identity_issues){
+      throw Error('Unexpected Star identity provenance');
+    }
+    if(!r.id||!r.name||!r.address||!r.state||!r.pin||ids.has(r.id)||
        !Array.isArray(r.star_categories)||!r.star_categories.length||!r.star_flags||
        r.star_flags.excluded!==false||r.ppn!==false)
        throw Error('Unsafe or duplicated Star listing');
     ids.add(r.id);
   });
+  if(!Number.isInteger(m.source_city_missing_eligible_count)||m.source_city_missing_eligible_count!==missingCity||
+     !Number.isInteger(m.source_city_missing_count)||m.source_city_missing_count<m.source_city_missing_eligible_count||
+     m.source_city_missing_policy!=='blank preserved; source city not inferred')
+     throw Error('Star source city totals do not reconcile');
   return snapshot;
 }
 function niqStarBadges(r){
@@ -378,7 +393,7 @@ function niqStarBadges(r){
   var f=r.star_flags||{},c=Array.isArray(r.star_categories)?r.star_categories:[];
   var types=[];
   if(c.indexOf('Network')>=0)types.push('Network');
-  if(c.indexOf('agreed')>=0||r.network_type==='ANH')types.push('Agreed');
+  if(c.indexOf('agreed')>=0)types.push('Agreed');
   if(c.indexOf('value_network')>=0)types.push('Value Network');
   if(f.vsp===true)types.push('VSP');
   if(f.ayush===true)types.push('AYUSH');

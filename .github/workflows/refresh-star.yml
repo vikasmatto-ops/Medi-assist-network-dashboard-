@@ -7,6 +7,8 @@ on:
       - 'scripts/collect_star.py'
       - 'scripts/validate_star.py'
       - 'tests/test_star_v7.py'
+      - 'tests/test_star_v8.py'
+      - 'index.html'
       - '.github/workflows/refresh-star.yml'
 permissions:
   contents: write

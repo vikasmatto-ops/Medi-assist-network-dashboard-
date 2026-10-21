@@ -3,6 +3,7 @@
 import argparse
 from collections import Counter
 import json
+import re
 from pathlib import Path
 import shutil
 from tempfile import NamedTemporaryFile
@@ -35,9 +36,42 @@ def validate(candidate,excluded,report,previous=None):
     if ex_meta.get('record_type')!='EXCLUDED_ONLY' or ex_meta.get('source_count')!=len(ex_rows):
         raise ValueError('Excluded source classification metadata invalid')
     expected={'id','name','address','city','state','pin','star_categories','star_flags'}
+    source_city_missing=0
     for r in rows+ex_rows:
-        if not expected.issubset(r) or not all(str(r[k]).strip() for k in ('id','name','address','city','state','pin')):
+        if not expected.issubset(r) or not all(str(r[k]).strip() for k in ('id','name','address','state','pin')):
             raise ValueError('Hospital identity incomplete')
+        if not re.fullmatch(r'\d{6}',str(r['pin'])):
+            raise ValueError('Hospital PIN invalid')
+        if not r['city']:
+            if (r.get('source_city_missing') is not True or
+                r.get('source_identity_issues')!=['missing_cityName']):
+                raise ValueError('City blank without exact source provenance')
+            try:
+                lat=float(r.get('latitude') or '')
+                lon=float(r.get('longitude') or '')
+            except (ValueError,TypeError):
+                raise ValueError('City blank without source coordinates')
+            if not (6.0 <= lat <= 38.5 and 68.0 <= lon <= 98.5):
+                raise ValueError('City blank with implausible source coordinates')
+            source_city_missing+=1
+        elif r.get('source_city_missing') or r.get('source_identity_issues'):
+            raise ValueError('Unexpected source identity quality flag')
+        if 'source_review_row' in r or 'source_filter_for_review' in r:
+            raise ValueError('Raw review-only fields included in published listing')
+    if (type(meta.get('source_city_missing_count')) is not int or
+        meta['source_city_missing_count']!=source_city_missing or
+        meta.get('source_city_missing_policy')!='blank preserved; source city not inferred' or
+        ex_meta.get('source_city_missing_count')!=source_city_missing or
+        meta.get('source_city_missing_eligible_count')!=sum(not r.get('city') for r in rows) or
+        meta.get('source_city_missing_excluded_count')!=sum(not r.get('city') for r in ex_rows) or
+        ex_meta.get('source_city_missing_eligible_count')!=meta.get('source_city_missing_eligible_count') or
+        ex_meta.get('source_city_missing_excluded_count')!=meta.get('source_city_missing_excluded_count') or
+        report.get('source_city_missing_count')!=source_city_missing or
+        (report.get('summary') or {}).get('source_city_missing_count')!=source_city_missing):
+        raise ValueError('Source-missing city provenance totals do not reconcile')
+    if source_city_missing>max(10,__import__('math').ceil((len(rows)+len(ex_rows))*.005)):
+        raise ValueError('Unexpected spike in missing source cities')
+    for r in rows+ex_rows:
         if not isinstance(r['star_categories'],list) or not set(r['star_categories']).issubset(ALL_CATEGORIES):
             raise ValueError('Unknown classification')
         if type(r.get('ppn')) is not bool or r['ppn'] is not False:

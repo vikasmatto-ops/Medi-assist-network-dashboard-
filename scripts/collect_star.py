@@ -25,7 +25,7 @@ SOURCE='Star Health'
 SOURCE_URL=base.PAGE
 MAX_PAGES=700
 MARKER='NETWORKIQ_STAR_V6'
-PATCH_VERSION='V7_SOURCE_QUALITY_REVIEW'
+PATCH_VERSION='V8_SOURCE_CITY_PROVENANCE'
 # The public source has used differing geographic spellings. Never infer that a
 # failed name filter means zero hospitals; reconcile ALL category totals globally.
 STATE_ALIASES={
@@ -189,6 +189,25 @@ def make_record(row,category,requested_state):
         record['source_review_row']=row
         record['source_filter_for_review']=requested_state
     return record
+
+def source_city_missing_safe(row):
+    """Only permit source-blank city with strong alternative official identity.
+
+    The source city remains blank. No city is inferred from PIN/address/coordinates.
+    Other malformed identities or unknown exclusion classifications fail closed.
+    """
+    if row.get('source_identity_issues')!=['missing_cityName'] or row.get('city')!='':
+        return False
+    if not all(norm(row.get(k)) for k in ('name','address','state','pin')):
+        return False
+    if not re.fullmatch(r'\d{6}',norm(row['pin'])):
+        return False
+    try:
+        lat=float(row.get('latitude') or '')
+        lon=float(row.get('longitude') or '')
+    except (TypeError, ValueError):
+        return False
+    return 6.0 <= lat <= 38.5 and 68.0 <= lon <= 98.5
 
 def merge_records(dst,src):
     for key in ('id','name','address','city','state','pin'):
@@ -454,30 +473,48 @@ def collect(out,pilot_only=False,delay=.5,page_size=10):
                 r.get('status')!='SOURCE_REPORTED_ZERO'
                 for k,r in report['queries'].items() if k.startswith(category+'|')):
                 raise SourceError('Unverified zero-count category: '+category)
-        # Every source record is counted in per-page totals, even if Star did
-        # not supply its name, city or PIN. Quarantine source anomalies rather
-        # than invent fields, silently drop them or publish them as eligible.
-        quality=[{
-          'id':r['id'], 'issues':r['source_identity_issues'],
-          'categories':r['star_categories'],
-          'source_state_filter':r.get('source_filter_for_review'),
-          'public_source_row':r.get('source_review_row',{})
-        } for r in gathered.values() if r.get('source_identity_issues')]
-        report['source_identity_review_count']=len(quality)
+        # A missing source city is not an invented city. Hospital identity is
+        # still reliable with source name, address, state, PIN and coordinates.
+        # OTHER missing fields or unknown source flags still prevent publication.
+        quality_records=[r for r in gathered.values() if r.get('source_identity_issues')]
+        city_without_source=[r for r in quality_records if source_city_missing_safe(r)]
+        unresolved_quality=[r for r in quality_records if not source_city_missing_safe(r)]
+        report['source_identity_review_count']=len(quality_records)
         report['source_identity_review_reasons']=dict(Counter(
-            issue for r in quality for issue in r['issues']))
-        if quality:
+            issue for r in quality_records for issue in r['source_identity_issues']))
+        report['source_city_missing_count']=len(city_without_source)
+        # Refuse a dramatic new loss of source city coverage.
+        if len(city_without_source)>max(10,math.ceil(len(gathered)*0.005)):
+            unresolved_quality.extend(city_without_source)
+        if quality_records:
             write_atomic(out/'star_identity_review.json',{
               'kind':'STAR_PUBLIC_SOURCE_DATA_QUALITY_REVIEW',
               'query_count':len(report['queries']),
-              'publication_permitted':False,
-              'source_record_issues':quality})
+              'publication_permitted':not bool(unresolved_quality),
+              'source_record_issues':[
+                {'id':r['id'],'issues':r['source_identity_issues'],
+                 'categories':r['star_categories'],
+                 'source_state_filter':r.get('source_filter_for_review'),
+                 'public_source_row':r.get('source_review_row',{}),
+                 'disposition':('SOURCE_CITY_NOT_PROVIDED' if source_city_missing_safe(r)
+                                else 'UNRESOLVED_DATA_QUALITY')}
+                for r in quality_records]})
+        if unresolved_quality:
             report['status']='PAUSED_SOURCE_DATA_QUALITY'
             report['errors'].append({'stage':'identity_review',
-                'error':f'{len(quality)} source records have missing or invalid identity fields; all page data retained'})
+                'error':f'{len(unresolved_quality)} source records have unresolved identity/flag problems'})
             print('STAR_DATA_QUALITY_REVIEW '+jdump(report['source_identity_review_reasons'])+
-                  '; complete audit artifact saved; NO PUBLISH',flush=True)
+                  '; unresolved records retained in audit; NO PUBLISH',flush=True)
             return report
+        # Retain source-blank city in published rows. The review artifact retains
+        # the full raw source row; the public dataset exposes only the missing
+        # city provenance, not duplicate raw contact details.
+        for r in city_without_source:
+            r['source_city_missing']=True
+            r.pop('source_review_row',None)
+            r.pop('source_filter_for_review',None)
+        print('STAR_SOURCE_CITY_MISSING preserved='+str(len(city_without_source))+
+              ' without location inference',flush=True)
         records=sorted(gathered.values(),key=lambda r:(r['state'],r['city'],r['name'],r['id']))
         eligible=[r for r in records if not r['star_flags']['excluded']]
         excluded=[r for r in records if r['star_flags']['excluded']]
@@ -496,6 +533,10 @@ def collect(out,pilot_only=False,delay=.5,page_size=10):
            'source_reported_zero_queries':report['source_zero_queries'],
            'zero_result_meaning':'Star API 2012/Provider Details Not Available/count 0; no independently verified nationwide zero claim',
            'source_count':len(eligible),'excluded_count':len(excluded),'total_unique_across_categories':len(records),
+           'source_city_missing_count':len(city_without_source),
+           'source_city_missing_eligible_count':sum(r.get('source_city_missing') is True for r in eligible),
+           'source_city_missing_excluded_count':sum(r.get('source_city_missing') is True for r in excluded),
+           'source_city_missing_policy':'blank preserved; source city not inferred',
            'policy_specific_cashless_eligibility_verified':False,
            'verified_page2_distinct':all(x.get('page2_distinct') for x in report['pilot'].values() if x['pages']>1),
            'dedupe_key':'source name/address/city/state/PIN',
@@ -511,7 +552,8 @@ def collect(out,pilot_only=False,delay=.5,page_size=10):
             'unverified_state_filters':[],
             'source_reported_zero_states':report['source_zero_states'],
             'source_reported_zero_queries':report['source_zero_queries'],
-            'state_partitions_reconciled':True}
+            'state_partitions_reconciled':True,
+           'source_city_missing_count':len(city_without_source)}
         return report
     except Exception as exc:
         report['status']='FAILED_CLOSED'
