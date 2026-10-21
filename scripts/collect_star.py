@@ -10,6 +10,7 @@ import datetime as dt
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
 import sys
@@ -24,8 +25,11 @@ CATEGORIES=('Network','agreed','value_network','vsp','ayush','nonpreferred')
 SOURCE='Star Health'
 SOURCE_URL=base.PAGE
 MAX_PAGES=700
+PARTITION_MAX_ATTEMPTS=3  # bounded: retry only this category/state, never whole country
+CHECKPOINT_MAX_AGE_SECONDS=3600  # never trust stale pages from previous days
+STABILITY_RECHECK_MIN_PAGES=20  # large, change-prone state partitions
 MARKER='NETWORKIQ_STAR_V6'
-PATCH_VERSION='V8_SOURCE_CITY_PROVENANCE'
+PATCH_VERSION='V9_PARTITION_EPOCH_RETRY'
 # The public source has used differing geographic spellings. Never infer that a
 # failed name filter means zero hospitals; reconcile ALL category totals globally.
 STATE_ALIASES={
@@ -68,6 +72,7 @@ def yn(x):
 
 class SourceError(RuntimeError):pass
 class UnverifiedSourceStatus(SourceError):pass
+class PartitionDrift(SourceError):pass
 
 def parse_hospital_response(blob,page_size):
     frames,errors=base.parse_flight(blob)
@@ -231,7 +236,7 @@ def write_atomic(path,data):
 def checkpoint_key(category,state):
     return re.sub('[^a-z0-9]+','_',category+'_'+state).strip('_').lower()
 
-def collect_query(action,category,state,out,page_size=10,delay=.5):
+def _collect_query_once(action,category,state,out,page_size=10,delay=.5):
     target=out/'checkpoints'/checkpoint_key(category,state)
     target.mkdir(parents=True,exist_ok=True)
     # Always refresh page 1: detect changed ordering/count before reusing old pages.
@@ -241,7 +246,7 @@ def collect_query(action,category,state,out,page_size=10,delay=.5):
         return [],{'count':0,'pages':0,'captured':0,'distinct':0}
     if pages>MAX_PAGES:raise SourceError(f'Pagination safety cap exceeded ({pages})')
     expected_first=min(page_size,count)
-    if len(first)!=expected_first:raise SourceError('First page truncated')
+    if len(first)!=expected_first:raise PartitionDrift('First page truncated')
     meta={'schema':MARKER,'category':category,'state':state,'page_size':page_size,
           'action_sha':hashlib.sha256(action.encode()).hexdigest(),
           'count':count,'pages':pages,'first_page_hash':digest(first)}
@@ -264,7 +269,11 @@ def collect_query(action,category,state,out,page_size=10,delay=.5):
         if checkpoint.exists():
             try:
                 old_page=json.loads(checkpoint.read_text(encoding='utf-8'))
-                if old_page.get('meta_sha')==digest(meta) and old_page.get('page')==p:
+                # Cache must be recent as well as matching the first-page count/hash.
+                # A matching first page does NOT make a two-day-old middle page safe.
+                age=time.time()-checkpoint.stat().st_mtime
+                if (0<=age<=CHECKPOINT_MAX_AGE_SECONDS and
+                    old_page.get('meta_sha')==digest(meta) and old_page.get('page')==p):
                     cached=old_page
             except (ValueError,OSError):pass
         if cached:
@@ -272,20 +281,71 @@ def collect_query(action,category,state,out,page_size=10,delay=.5):
         else:
             time.sleep(max(.1,delay))
             rows,n,m=page(action,category,state,p,page_size)
+        if n!=count or m!=pages:
+            raise PartitionDrift(f'Source count/page count changed during query: '
+                 f'category={category} state={state} page={p}/{pages} '
+                 f'first_count={count} page_count={n} first_pages={pages} page_pages={m}')
+        # Only save a checkpoint after verifying it belongs to this count epoch.
+        if cached is None:
             write_atomic(checkpoint,{'meta_sha':digest(meta),'rows':rows,'count':n,'pages':m,'page':p})
-        if n!=count or m!=pages:raise SourceError('Source count/page count changed during query')
-        if len(rows)!=min(page_size,count-(p-1)*page_size):raise SourceError(f'Truncated page {p}/{pages}')
+        if len(rows)!=min(page_size,count-(p-1)*page_size):raise PartitionDrift(f'Truncated page {p}/{pages}')
         sig=digest(rows)
-        if sig in signatures:raise SourceError(f'Repeated page payload at {p}/{pages}')
+        if sig in signatures:raise PartitionDrift(f'Repeated page payload at {p}/{pages}')
         signatures.add(sig)
         for r in rows:
             rid=raw_identity(r)
-            if rid in identities:raise SourceError(f'Duplicate hospital across pages: {p}/{pages}')
+            if rid in identities:raise PartitionDrift(f'Duplicate hospital across pages: {p}/{pages}')
             identities.add(rid)
         all_rows.extend(rows)
         if p%50==0 or p==pages:print(category,state,f'{p}/{pages}, rows {len(all_rows)}/{count}',flush=True)
-    if len(all_rows)!=count or len(identities)!=count:raise SourceError('Query completeness reconciliation failed')
+    if len(all_rows)!=count or len(identities)!=count:raise PartitionDrift('Query completeness reconciliation failed')
+    # Offset-paginated live API has no snapshot cursor. Confirm the bookends
+    # still match after a large traversal, instead of accepting a changed epoch.
+    if pages>=STABILITY_RECHECK_MIN_PAGES:
+        # Five distributed probes guard against same-count reorderings in a
+        # mutable offset-paginated endpoint (not just a changed total count).
+        probe_numbers=sorted({1,pages,max(1,math.ceil(pages*.25)),
+                              max(1,math.ceil(pages*.50)),
+                              max(1,math.ceil(pages*.75))})
+        for probe in probe_numbers:
+            expected=all_rows[(probe-1)*page_size:probe*page_size]
+            observed,n,m=page(action,category,state,probe,page_size)
+            if n!=count or m!=pages or digest(observed)!=digest(expected):
+                raise PartitionDrift(
+                    f'State pagination changed during final verification: '
+                    f'category={category} state={state} probe={probe}/{pages} '
+                    f'first_count={count} now_count={n} first_pages={pages} now_pages={m}')
     return [make_record(r,category,state) for r in all_rows],{'count':count,'pages':pages,'captured':len(all_rows),'distinct':len(identities)}
+
+
+def _invalidate_partition(out,category,state):
+    # Restrict cleanup to this one category/state; preserve all other checkpoints.
+    target=out/'checkpoints'/checkpoint_key(category,state)
+    for old in target.glob('page_*.json'):old.unlink()
+    meta=target/'_meta.json'
+    if meta.exists():meta.unlink()
+
+
+def collect_query(action,category,state,out,page_size=10,delay=.5):
+    last=None
+    for attempt in range(1,PARTITION_MAX_ATTEMPTS+1):
+        try:
+            result=_collect_query_once(action,category,state,out,page_size,delay)
+            if attempt>1:
+                print('STAR_PARTITION_RECOVERED '+category+'|'+state+
+                      ' stable_attempt='+str(attempt),flush=True)
+            return result
+        except PartitionDrift as exc:
+            last=exc
+            print('STAR_PARTITION_COUNT_DRIFT '+category+'|'+state+
+                  ' attempt='+str(attempt)+'/'+str(PARTITION_MAX_ATTEMPTS)+
+                  ' reason='+str(exc)[:400],flush=True)
+            _invalidate_partition(out,category,state)
+            if attempt<PARTITION_MAX_ATTEMPTS:
+                time.sleep(min(12.,max(0.,delay)*4*attempt))
+    raise SourceError('Partition unstable after '+str(PARTITION_MAX_ATTEMPTS)+
+        ' complete attempts; refused mixed-epoch data: '+str(last))
+
 
 def collect_state_with_aliases(action,category,canonical,out,page_size=10,delay=.5):
     # Backwards-compatible with the initial pipeline: only supported explicit
