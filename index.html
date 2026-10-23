@@ -780,6 +780,15 @@ function loadCurrentNetwork(){
     syncLocationOptions();
     var hero=document.getElementById('source-meta');
     if(hero)hero.textContent='Nationwide search · '+medi.hospitals.length.toLocaleString('en-IN')+' Medi Assist records (API '+networkiqDate(medi.metadata.snapshot_retrieved_at_utc)+') + '+icici.hospitals.length.toLocaleString('en-IN')+' ICICI Lombard search listings (captured through '+networkiqDate(icici.metadata.observed_through_utc)+') + '+indus.hospitals.length.toLocaleString('en-IN')+' IndusInd source listings (API '+networkiqDate(indus.metadata.retrieved_at_utc)+', IPD/OPD distinguished). Care Health '+care.hospitals.length.toLocaleString('en-IN')+' public-locator search records (partial state coverage; policy-specific eligibility not verified). '+(niva?' Niva Bupa '+niva.hospitals.length.toLocaleString('en-IN')+' official API records ('+networkiqDate(niva.metadata.captured_utc)+', scope not independently verified).':' Niva Bupa feed temporarily unavailable.')+(star?' Star Health '+star.hospitals.length.toLocaleString('en-IN')+' verified-page official-source listings ('+networkiqDate(star.metadata.captured_utc)+') plus '+star.metadata.excluded_count.toLocaleString('en-IN')+' excluded providers stored separately.':' Star Health awaiting validated nationwide snapshot.')+' These are source records, not unique hospitals. Verify current policy-specific cashless eligibility with insurer/TPA.';
+    // Star data freshness is a snapshot age, not an insurer eligibility guarantee.
+    if(hero && star && star.metadata && star.metadata.captured_utc){
+      var starCapturedAt=new Date(star.metadata.captured_utc);
+      var starAgeHours=(Date.now()-starCapturedAt.getTime())/3600000;
+      if(Number.isFinite(starAgeHours) && starAgeHours>=0){
+        hero.textContent += ' Star last captured: '+starCapturedAt.toLocaleString('en-IN', {timeZone:'Asia/Kolkata'})+' IST.';
+        if(starAgeHours>36)hero.textContent += ' WARNING: Star snapshot over 36 hours old; verify live status with Star Health.';
+      }
+    }
     buildKPI();applyF();
   }).catch(function(err){
     console.error('Network data could not be loaded',err);

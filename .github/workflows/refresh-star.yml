@@ -1,11 +1,15 @@
 name: Refresh Star Health official public directory
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '45 20 * * *' # daily around 02:15 IST; GitHub scheduling may delay
   push:
     branches: [main]
     paths:
       - 'scripts/collect_star.py'
       - 'scripts/validate_star.py'
+      - 'scripts/star_live_freshness.py'
+      - 'tests/test_star_freshness.py'
       - 'tests/test_star_v7.py'
       - 'tests/test_star_v8.py'
       - 'index.html'
@@ -38,11 +42,16 @@ jobs:
       - name: Collect 216 Star query partitions by direct first-party POST
         id: collect
         run: python scripts/collect_star.py --out build/star --delay 0.6 --page-size 10
-      - name: Validate complete snapshot and prepare Star-only JSON outputs
+      # STAR_LIVE_FRESHNESS_V1: source count and first-page recheck before publish.
+      - name: Recheck live Star partition totals and first-page records
+        id: parity
         if: steps.collect.outcome == 'success'
+        run: python scripts/star_live_freshness.py --input build/star --page-size 10 --delay 0.2
+      - name: Validate complete snapshot and prepare Star-only JSON outputs
+        if: steps.collect.outcome == 'success' && steps.parity.outcome == 'success'
         run: python scripts/validate_star.py --input build/star --live data
       - name: Commit only both verified Star datasets
-        if: steps.collect.outcome == 'success'
+        if: steps.collect.outcome == 'success' && steps.parity.outcome == 'success'
         run: |
           git config user.name 'networkiq-automation'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -61,6 +70,7 @@ jobs:
           path: |
             build/star/star_audit.json
             build/star/star_identity_review.json
+            build/star/star_live_freshness.json
           if-no-files-found: warn
           retention-days: 7
       - name: Save checkpoints for safe restart; never publish partial data
