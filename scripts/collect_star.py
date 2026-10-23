@@ -125,7 +125,24 @@ def source_action(action,args,page_size,retries=2):
                 time.sleep(2**i);continue
             if status!=200:raise SourceError(f'HTTP {status}: {body[:120]}')
             if 'text/x-component' not in ct:raise SourceError('Unexpected Flight content type: '+ct)
-            return parse_hospital_response(body,page_size)
+            try:
+                return parse_hospital_response(body,page_size)
+            except SourceError as exc:
+                # On rare live requests Star returns 200 Flight content without
+                # the expected data frame. Retry this exact transient response
+                # before failing closed. Never treat it as an empty hospital page.
+                if str(exc) != 'Missing expected Flight data frame':
+                    raise
+                if i == retries:
+                    raise SourceError(
+                        'Missing expected Flight data frame after '
+                        + str(retries+1) + ' bounded attempts; source unavailable'
+                    ) from exc
+                print('STAR_TRANSIENT_FLIGHT_RETRY category='+str(args[3])+
+                      ' state='+str(args[0])+' page='+str(args[5])+
+                      ' attempt='+str(i+1)+'/'+str(retries+1),flush=True)
+                time.sleep(2**i)
+                continue
         except (urllib.error.URLError,TimeoutError) as e:
             if i==retries:raise SourceError('Network error after bounded retry: '+str(e)[:170]) from e
             time.sleep(2**i)
