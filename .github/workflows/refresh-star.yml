@@ -61,7 +61,30 @@ jobs:
             exit 0
           fi
           git commit -m 'Refresh verified Star Health public hospital directory'
-          git push
+          # STAR_PUSH_REBASE_GUARD_V1: Other insurers may push during a 2-hour Star capture.
+          # Preserve the initial checkout's baseline to detect competing Star publications.
+          base_sha="$(git rev-parse HEAD^)"
+          for attempt in 1 2 3; do
+            git fetch origin main
+            if ! git diff --quiet "$base_sha" origin/main -- data/star_health.json data/star_health_excluded.json; then
+              echo 'STAR_CONCURRENT_SOURCE_UPDATE: A newer Star dataset exists; refusing to overwrite it.'
+              exit 1
+            fi
+            # Rebase ONLY our validated Star data commit over unrelated commits.
+            # Never force-push, merge unrelated hospital datasets, or hide conflicts.
+            if ! git rebase origin/main; then
+              git rebase --abort || true
+              echo 'STAR_REBASE_CONFLICT: Nothing published.'
+              exit 1
+            fi
+            if git push origin HEAD:main; then
+              echo 'STAR_REFRESH_PUBLISHED_SAFE_PUSH'
+              exit 0
+            fi
+            sleep "$((attempt * 2))"
+          done
+          echo 'STAR_PUSH_REJECTED_AFTER_RETRIES: Nothing published.'
+          exit 1
       - name: Preserve Star collection audit and public-source identity review
         if: always()
         uses: actions/upload-artifact@v4
