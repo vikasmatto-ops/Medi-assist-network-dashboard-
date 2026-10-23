@@ -2,7 +2,13 @@ name: Refresh Niva Bupa public network
 on:
   workflow_dispatch:
   schedule:
-    - cron: '15 5 * * *' # daily 10:45 IST
+    - cron: '15 2,8,14,20 * * *' # six-hourly collection windows, UTC; GitHub may delay
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/collect_niva_resumable.py'
+      - 'tests/test_niva_resumable.py'
+      - '.github/workflows/refresh-niva.yml'
 permissions:
   contents: write
 concurrency:
@@ -11,7 +17,7 @@ concurrency:
 jobs:
   capture:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
@@ -19,20 +25,62 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Collect all pages directly from official Niva API
-        run: python scripts/collect_niva.py --output build/niva --delay 0.35
-      - name: Convert official snapshot and run completeness checks
-        run: python scripts/prepare_niva.py build/NetworkIQ_Niva_DirectAPI_COMPLETE.zip build/niva_bupa.json --audit build/niva_audit.json
-      - name: Refuse unusually large source-count changes
-        run: python scripts/validate_refresh.py data/niva_bupa.json build/niva_bupa.json
-      - name: Publish Niva-only data update
+      - name: Verify Niva checkpoint and safety tests
+        run: python -B -m unittest discover -s tests -p 'test_niva_resumable.py' -q
+      - name: Restore recent verified Niva page checkpoints
+        uses: actions/cache/restore@v4
+        with:
+          path: build/niva/checkpoint
+          key: networkiq-niva-pages-${{ github.run_id }}
+          restore-keys: |
+            networkiq-niva-pages-
+      - name: Collect official Niva pages within bounded window
+        run: python -u scripts/collect_niva_resumable.py --output build/niva --seconds 1200 --delay 0.35
+      - name: Determine whether full verified snapshot exists
+        id: ready
+        shell: bash
         run: |
-          if git diff --quiet -- data/niva_bupa.json; then
-            echo 'No changes to publish'
+          if [ -f build/NetworkIQ_Niva_DirectAPI_COMPLETE.zip ]; then
+            echo 'complete=true' >> "$GITHUB_OUTPUT"
+            echo 'NIVA_FULL_SNAPSHOT_READY'
+          else
+            echo 'complete=false' >> "$GITHUB_OUTPUT"
+            cat build/niva/niva_status.json
+            echo 'NIVA_PARTIAL_PROGRESS_SAVED. No public data changed.'
+          fi
+      - name: Convert official snapshot and check all hospitals
+        if: steps.ready.outputs.complete == 'true'
+        run: python scripts/prepare_niva.py build/NetworkIQ_Niva_DirectAPI_COMPLETE.zip build/niva_bupa.json --audit build/niva_audit.json
+      - name: Validate and stage candidate against prior Niva snapshot
+        if: steps.ready.outputs.complete == 'true'
+        run: python scripts/validate_refresh.py data/niva_bupa.json build/niva_bupa.json
+      - name: Publish only validated Niva dataset
+        if: steps.ready.outputs.complete == 'true'
+        shell: bash
+        run: |
+          git add data/niva_bupa.json
+          if git diff --cached --quiet; then
+            echo 'NIVA_NO_CHANGE verified, old snapshot remains'
             exit 0
           fi
           git config user.name 'networkiq-automation'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add data/niva_bupa.json
-          git commit -m 'Refresh Niva Bupa official hospital network'
+          git commit -m 'Refresh fully verified Niva Bupa hospital network'
           git push
+      - name: Persist incomplete checkpoints between scheduled runs
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: build/niva/checkpoint
+          key: networkiq-niva-pages-${{ github.run_id }}
+      - name: Keep source progress and failure audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: networkiq-niva-refresh-audit
+          path: |
+            build/niva/niva_status.json
+            build/niva/audit.json
+            build/niva_audit.json
+          if-no-files-found: warn
+          retention-days: 7
