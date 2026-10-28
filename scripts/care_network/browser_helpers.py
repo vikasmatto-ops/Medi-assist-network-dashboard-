@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 
 LOCATOR_URL='https://www.careinsurance.com/'
+FALLBACK_LOCATOR_URL='https://www.careinsurance.com/health-plan-network-hospitals.html'
 API_PATTERN=re.compile(r'^https://ser\.careinsurance\.com/api/networkHospitalDetails(?:ByCityState)?(?:\?|$)',re.I)
 
 def match_api(u):return bool(API_PATTERN.match(u))
@@ -30,15 +31,30 @@ def diagnostic_js():
         title:document.title.slice(0,130),modern_field:fields.some(e=>/search by city|pincode, hospital/i.test(e.placeholder)),
         fields,search_buttons:buttons,body_has_hospital_locator:/hospital locator/i.test(document.body?.innerText||''),
         body_has_results:/Found\s+\d+\s+Hospitals/i.test(document.body?.innerText||''),
+        page_inputs:document.querySelectorAll('input').length,
+        body_excerpt:(document.body?.innerText||'').slice(0,300),
+        iframe_count:document.querySelectorAll('iframe').length,
         jquery_present:typeof window.jQuery==='function'};
     }'''
 
-async def modern_input(page,emit):
+async def modern_input(page,emit,max_wait=11):
     # Verified in the actual v5 live report: id=city_name_hospital, name=city_name_hospital,
     # placeholder=' '. Do NOT rely on the visible placeholder text, which is rendered separately.
     selectors=['#city_name_hospital','input[name="city_name_hospital"]',
-               'input[placeholder*="search by city" i]']
-    for trial in range(22):
+               'input[placeholder*="search by city" i]',
+               'input[placeholder*="either city or state name" i]']
+    # The homepage locator can load only after its section becomes visible.
+    # Scroll to a confirmed site label before deciding the input has vanished.
+    try:
+        await page.evaluate(r'''() => {
+          const nodes=[...document.querySelectorAll('h1,h2,h3,h4,div,section,span')];
+          const el=nodes.find(e=>e.children.length<4 &&
+             /^hospital locator$/i.test((e.textContent||'').trim()) &&
+             e.getBoundingClientRect().height>0);
+          if(el)el.scrollIntoView({block:'center'});
+        }''')
+    except Exception as ex:emit('HOSPITAL SECTION SCROLL: '+str(ex).splitlines()[0][:100])
+    for trial in range(max_wait):
         for selector in selectors:
             q=page.locator(selector)
             for i in range(min(await q.count(),3)):
@@ -48,13 +64,13 @@ async def modern_input(page,emit):
                         emit('CONFIRMED HOSPITAL FIELD: '+selector)
                         return item
                 except Exception: pass
-        if trial in (0,9,19):
+        if trial in (0,max_wait-1):
             try:
                 d=await page.evaluate(diagnostic_js())
-                emit('FIELD WAIT '+str(trial)+'s: '+str(d['fields'][:3])[:200])
+                emit('FIELD WAIT '+str(trial)+'s: '+str({k:d.get(k) for k in ('url_path','title','ready_state','page_inputs','iframe_count','body_has_hospital_locator','fields')})[:350])
             except Exception as e: emit('FIELD CHECK pending navigation: '+str(e).splitlines()[0][:110])
         await asyncio.sleep(1)
-    emit('FAILED: Home hospital input missing; check page diagnostics')
+    emit('FAILED: Locator hospital input missing; check page diagnostics')
     return None
 
 async def click_search(page,target,emit):
@@ -96,7 +112,19 @@ async def click_search(page,target,emit):
 
 async def search_form(page,state,emit):
     target=await modern_input(page,emit)
-    if target is None:return False
+    if target is None:
+        # This is the insurer's official dedicated network-hospital locator,
+        # not a guessed third-party proxy or direct API. We still require a
+        # real website-generated, validated networkHospitalDetails response.
+        emit('OFFICIAL LOCATOR FALLBACK: navigating to dedicated hospital-list page')
+        try:
+            await page.goto(FALLBACK_LOCATOR_URL,wait_until='domcontentloaded',timeout=60000)
+            try:await page.wait_for_load_state('load',timeout=16000)
+            except Exception:pass
+            target=await modern_input(page,emit,max_wait=9)
+        except Exception as ex:
+            emit('DEDICATED LOCATOR FAILED: '+str(ex).splitlines()[0][:230])
+        if target is None:return False
     try:
         await target.fill(state,timeout=12000)
         actual=await target.input_value()

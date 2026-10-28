@@ -2,6 +2,7 @@ import json,tempfile,unittest
 from pathlib import Path
 from scripts.care_network.quality import STATES,slug,state_matches,decode_page,reconcile,ValidationError
 from scripts.care_network.collect import chosen_states
+from scripts.care_network.browser_helpers import FALLBACK_LOCATOR_URL,LOCATOR_URL,diagnostic_js
 from scripts.care_network.publish import plan,apply,inspect_state
 
 
@@ -14,6 +15,10 @@ def record(i,state='haryana'):
             'state':state,'city':'gurugram','hospital_category':'NL_SMARTSELECT'}
 
 class EndToEnd(unittest.TestCase):
+    def test_official_care_locator_fallback_is_first_party(self):
+        self.assertEqual(LOCATOR_URL,'https://www.careinsurance.com/')
+        self.assertEqual(FALLBACK_LOCATOR_URL,'https://www.careinsurance.com/health-plan-network-hospitals.html')
+        self.assertIn('page_inputs',diagnostic_js())
     def test_state_coverage_and_shards(self):
         self.assertEqual(len(STATES),36)
         a=type('Args',(),{'all_states':True,'states':None,'shard_index':0,'shard_count':6})()
@@ -88,3 +93,27 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(len(set(str(v['id']) for v in obj['hospitals'])),417)
 
 if __name__=='__main__':unittest.main()
+
+# Dedicated first-party locator fallback is exercised without networking.
+import asyncio
+from unittest.mock import AsyncMock, patch
+from scripts.care_network import browser_helpers as bh
+
+class BrowserLocatorFallback(unittest.IsolatedAsyncioTestCase):
+    async def test_official_dedicated_fallback_is_used_only_if_home_field_missing(self):
+        class Input:
+            async def fill(self, value, **kwargs): self.value=value
+            async def input_value(self): return self.value
+            async def press(self, value, **kwargs): pass
+        class Page:
+            def __init__(self): self.urls=[]
+            async def goto(self,url,**kwargs): self.urls.append(url)
+            async def wait_for_load_state(self,*args,**kwargs): return None
+        p=Page(); inp=Input(); log=[]
+        with patch.object(bh,'modern_input',new=AsyncMock(side_effect=[None,inp])) as mi, \
+             patch.object(bh,'click_search',new=AsyncMock(return_value=True)) as click:
+            self.assertTrue(await bh.search_form(p,'Haryana',log.append))
+            self.assertEqual(p.urls,[bh.FALLBACK_LOCATOR_URL])
+            self.assertEqual(mi.await_count,2)
+            self.assertEqual(inp.value,'Haryana')
+            click.assert_awaited_once()

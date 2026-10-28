@@ -10,10 +10,10 @@ from urllib.parse import urlsplit
 from datetime import datetime,timezone
 from playwright.async_api import async_playwright
 try:
-    from .browser_helpers import LOCATOR_URL,match_api,search_form,wheel_hospital_list,inspect_list
+    from .browser_helpers import LOCATOR_URL,match_api,search_form,wheel_hospital_list,inspect_list,diagnostic_js
     from .quality import STATES,slug,state_matches,decode_page,reconcile,ValidationError
 except ImportError:
-    from browser_helpers import LOCATOR_URL,match_api,search_form,wheel_hospital_list,inspect_list
+    from browser_helpers import LOCATOR_URL,match_api,search_form,wheel_hospital_list,inspect_list,diagnostic_js
     from quality import STATES,slug,state_matches,decode_page,reconcile,ValidationError
 
 
@@ -95,6 +95,12 @@ async def capture_state(browser,state,output,timeout_seconds=650,headed=False):
         search_armed=True
         clicked=await search_form(page,state,log)
         if not clicked:
+            try:
+                evidence=await page.evaluate(diagnostic_js())
+                log('SITE_DIAGNOSTIC: '+json.dumps(evidence,ensure_ascii=False)[:220])
+                observed.append({'page_diagnostic':evidence})
+                await page.screenshot(path=str(output.with_name(output.stem+'-page.png')),timeout=9000)
+            except Exception as ex:log('SITE_DIAGNOSTIC_ERROR: '+str(ex).splitlines()[0][:150])
             errors.append('Official Care state search controls could not be submitted')
             return save()
         for _ in range(45):
@@ -164,6 +170,7 @@ async def run(args):
     args.output_dir.mkdir(parents=True,exist_ok=True)
     if not states:print('No states assigned to this shard');return 0
     outcomes=[]
+    blocked_all=True
     async with async_playwright() as p:
         kw={'headless':not args.headed}
         if args.browser_channel=='chrome':kw['channel']='chrome'
@@ -182,13 +189,30 @@ async def run(args):
                                  'file':out.name})
                 print(f'RESULT {state}: {meta["source_records_observed"]}/{meta["expected_source_records"]}, '+
                       f'publishable={meta["publishable"]}, off_state={meta["off_state_records"]}',flush=True)
+                no_ui=('Official Care state search controls could not be submitted' in meta.get('errors',[])
+                       and not meta['source_records_observed'])
+                no_source_api=(not meta['source_records_observed']
+                    and 'No valid matching state API page after official Search click' in meta.get('errors',[]))
+                if not (no_ui or no_source_api):blocked_all=False
+                elif no_ui and len(outcomes)==1:
+                    # A missing form is a page-level blocker, not 36 independent
+                    # state failures. Preserve a screenshot then stop this shard.
+                    print('CARE_LOCATOR_UI_BLOCKED: stopped shard after first form failure',flush=True)
+                    break
+                elif no_source_api and len(outcomes)>=2 and blocked_all:
+                    print('CARE_API_OBSERVATION_BLOCKED: two searches yielded no official source frames',flush=True)
+                    break
         finally:await browser.close()
     summary={'generated_at_utc':datetime.now(timezone.utc).isoformat(),
              'collector':'care-panindia-1.0','shard_index':args.shard_index,
-             'shard_count':args.shard_count,'results':outcomes}
+             'shard_count':args.shard_count,'results':outcomes,
+             'blocked_all':blocked_all}
     atomic_json(args.output_dir/'_run_summary.json',summary)
-    # An incomplete state does NOT block collection of other states. Return 0
-    # so Actions can upload all diagnostic artifacts; publish step gates quality.
+    # Partial states remain reportable; an entirely blocked browser must NOT
+    # be labelled a green successful hospital capture.
+    if blocked_all:
+        print('CARE_CAPTURE_FAILED_NO_VALID_SOURCE_PAGES: source unchanged',flush=True)
+        return 2
     return 0
 
 def cli():
