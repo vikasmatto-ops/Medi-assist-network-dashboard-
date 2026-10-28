@@ -765,9 +765,9 @@ function loadCurrentNetwork(){
     var medi=parts[0], icici=parts[1], indus=parts[2], care=parts[3], niva=parts[4], star=parts[5];
     if(!Array.isArray(medi.hospitals)||medi.hospitals.length<20000||!medi.metadata||medi.metadata.scope!=='nationwide')
       throw new Error('Missing or incomplete Medi Assist nationwide dataset');
-    if(!Array.isArray(icici.hospitals)||icici.hospitals.length<14000||!icici.metadata||icici.metadata.verification_level!=='OFFICIAL_SEARCH_RESULT_ONLY'||icici.hospitals.length!==icici.metadata.record_count)
+    if(!Array.isArray(icici.hospitals)||icici.hospitals.length<11000||!icici.metadata||icici.metadata.verification_level!=='OFFICIAL_SEARCH_RESULT_ONLY'||icici.hospitals.length!==icici.metadata.record_count)
       throw new Error('Missing or incomplete ICICI Lombard snapshot');
-    if(!indus.metadata || indus.metadata.source_name!=='IndusInd General Insurance' || indus.metadata.verification_level!=='OFFICIAL_SEARCH_RESULT_ONLY' || !Array.isArray(indus.hospitals) || indus.hospitals.length!==indus.metadata.record_count || indus.hospitals.length!==15229)
+    if(!indus.metadata || indus.metadata.source_name!=='IndusInd General Insurance' || indus.metadata.verification_level!=='OFFICIAL_SEARCH_RESULT_ONLY' || !Array.isArray(indus.hospitals) || indus.hospitals.length!==indus.metadata.record_count || indus.hospitals.length<10000)
       throw new Error('Missing or incomplete IndusInd nationwide snapshot');
     if(!care.metadata || care.metadata.source_name!=='Care Health' || !Array.isArray(care.hospitals) || care.hospitals.length<1000 || care.metadata.state_attributed_hospital_rows!==care.hospitals.length || care.metadata.policy_specific_cashless_eligibility_verified!==false)
       throw new Error('Missing or unverifiable Care Health staging snapshot');

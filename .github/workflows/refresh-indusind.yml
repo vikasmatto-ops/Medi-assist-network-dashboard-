@@ -1,0 +1,59 @@
+name: Refresh IndusInd General official SearchList
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '10 3 * * *' # around 08:40 IST; GitHub may run late
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/collect_indusind.py'
+      - 'scripts/refresh_indusind.py'
+      - 'tests/test_networkiq_refresh.py'
+      - '.github/workflows/refresh-indusind.yml'
+permissions:
+  contents: write
+concurrency:
+  group: networkiq-indusind-refresh
+  cancel-in-progress: false
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test IndusInd mapping and safety gates
+        run: |
+          PYTHONPATH=scripts python -B -m unittest discover -s tests -p 'test_collect_indusind.py' -q
+      - name: Collect and independently check first and last API pages
+        run: python -u scripts/refresh_indusind.py --previous data/indusind_general.json --output data/indusind_general.json
+      - name: Publish verified source only, preserving concurrent insurer updates
+        run: |
+          git config user.name 'networkiq-automation'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/indusind_general.json
+          if git diff --cached --quiet; then echo 'INDUSIND_NO_CHANGE'; exit 0; fi
+          base_sha="$(git rev-parse HEAD)"
+          git commit -m 'Refresh verified IndusInd General hospital listings'
+          for n in 1 2 3; do
+            git fetch origin main
+            if ! git diff --quiet "$base_sha" origin/main -- data/indusind_general.json; then
+              echo 'CONCURRENT_INDUSIND_DATA_CHANGE; no publication'; exit 1
+            fi
+            if ! git rebase origin/main; then git rebase --abort || true; exit 1; fi
+            if git push origin HEAD:main; then echo 'INDUSIND_REFRESH_PUBLISHED'; exit 0; fi
+            sleep $((n * 2))
+          done
+          exit 1
+      - name: Retain source audit when collection fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: networkiq-indusind-source-audit
+          path: build/indusind/source.zip
+          if-no-files-found: ignore
+          retention-days: 7
