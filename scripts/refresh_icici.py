@@ -30,27 +30,58 @@ def run_shard(shard,total,out,session=None):
         info={'state':st['label'],'cities':[],'complete':False}
         result['states'].append(info)
         try:
-            chosen,cities=cli.prepare_state(st['label'])
-            if len(cities)<1 or len(cities)>2000:raise ValueError('City option count invalid')
-            ck=[header_key(x['label']) for x in cities]
-            if len(ck)!=len(set(ck)):
-                raise RuntimeError('Duplicate city label; cannot prove which to select')
-            info['city_count']=len(cities)
-            for city in cities:
-                cityinfo={'label':city['label'],'captured_utc':utc(),'count':0,'status':'PENDING','hospitals':[]}
-                info['cities'].append(cityinfo)
+            chosen,cities=None,None
+            for state_attempt in range(3):
                 try:
-                    response=cli.search(chosen['value'],city['value'])
-                    records,signature=get_rows_from_html(response,st['label'],city['label'])
-                    verdict,reason=check_records(records,st['label'],city['label'])
-                    if verdict!='CAPTURED':raise RuntimeError(verdict+': '+reason)
-                    cityinfo.update({'status':'CAPTURED','count':len(records),'hospitals':records,
-                                     'table_evidence':signature})
-                except Exception as e:
-                    cityinfo.update({'status':'FAILED','error':type(e).__name__+': '+str(e)[:220]})
+                    chosen,cities=cli.prepare_state(st['label'])
+                    break
+                except Exception as exc:
+                    if state_attempt==2:raise
+                    print(f'ICICI_STATE_RETRY {st["label"]} {type(exc).__name__} attempt={state_attempt+1}/3',flush=True)
+                    time.sleep(3*(state_attempt+1))
+            if not 1<=len(cities)<=2000:raise ValueError('City option count invalid')
+            # Duplicate *labels* are valid in the source if their distinct
+            # dropdown option values represent distinct searches. Inspect all.
+            # Identical label+value options are redundant; conflicting labels
+            # for a single option value are ambiguous and must fail closed.
+            unique=[];by_value={};duplicate_exact=0
+            for city in cities:
+                value=str(city.get('value') or '').strip()
+                if not value:raise RuntimeError('City option has no source value')
+                old=by_value.get(value)
+                if old is not None:
+                    if header_key(old['label'])!=header_key(city['label']):
+                        raise RuntimeError('Conflicting city labels for same source option value')
+                    duplicate_exact+=1
+                    continue
+                by_value[value]=city;unique.append(city)
+            info['source_city_options']=len(cities)
+            info['duplicate_exact_options_skipped']=duplicate_exact
+            info['repeated_city_labels']=len(unique)-len({header_key(x['label']) for x in unique})
+            info['city_count']=len(unique)
+            for city in unique:
+                cityinfo={'label':city['label'],
+                          'source_option_digest':hashlib.sha256(str(city['value']).encode()).hexdigest()[:16],
+                          'captured_utc':utc(),'count':0,'status':'PENDING','hospitals':[]}
+                info['cities'].append(cityinfo)
+                for city_attempt in range(3):
+                    try:
+                        response=cli.search(chosen['value'],city['value'])
+                        records,signature=get_rows_from_html(response,st['label'],city['label'])
+                        verdict,reason=check_records(records,st['label'],city['label'])
+                        if verdict!='CAPTURED':raise RuntimeError(verdict+': '+reason)
+                        cityinfo.update({'status':'CAPTURED','count':len(records),'hospitals':records,
+                                         'table_evidence':signature})
+                        cityinfo.pop('error',None)
+                        break
+                    except Exception as e:
+                        cityinfo.update({'status':'FAILED','error':type(e).__name__+': '+str(e)[:220]})
+                        if city_attempt<2:
+                            print(f'ICICI_CITY_RETRY {st["label"]} {city["label"]} {type(e).__name__} attempt={city_attempt+1}/3',flush=True)
+                            time.sleep(3*(city_attempt+1))
                 print('ICICI_CITY '+st['label']+' '+city['label']+' '+cityinfo['status']+' '+str(cityinfo['count']),flush=True)
                 atomic(out,result)
-            info['complete']=all(c['status']=='CAPTURED' for c in info['cities']) and len(info['cities'])==len(cities)
+            info['complete']=all(c['status']=='CAPTURED' for c in info['cities']) and len(info['cities'])==len(unique)
         except Exception as e:
             info['error']=type(e).__name__+': '+str(e)[:250]
         atomic(out,result)

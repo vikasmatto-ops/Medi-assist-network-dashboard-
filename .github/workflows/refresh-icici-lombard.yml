@@ -31,6 +31,8 @@ jobs:
           python-version: '3.12'
       - name: Install HTML form parser and official client dependencies
         run: python -m pip install 'requests>=2.31,<3' 'beautifulsoup4>=4.12,<5'
+      - name: Verify ICICI retries and duplicate-option safety
+        run: python -B -m unittest discover -s tests -p 'test_icici_recovery.py' -q
       - name: Collect fresh public city searches in this shard
         run: python -u scripts/refresh_icici.py --shard-index ${{ matrix.shard }} --shard-count 6 --out build/icici/icici-shard-${{ matrix.shard }}.json
       - uses: actions/upload-artifact@v4
@@ -57,6 +59,10 @@ jobs:
           pattern: icici-shard-*
           path: build/icici
           merge-multiple: true
+      - name: Install official search parser dependencies for publication
+        run: python -m pip install 'requests>=2.31,<3' 'beautifulsoup4>=4.12,<5'
+      - name: Verify ICICI offline regression tests before publication
+        run: python -B -m unittest discover -s tests -p 'test_icici_recovery.py' -q
       - name: Validate all state and city scans before any update
         run: python -m scripts.refresh_icici --publish --input build/icici --previous data/icici_lombard.json --out data/icici_lombard.json
       - name: Safely publish only verified ICICI snapshot

@@ -162,19 +162,36 @@ class ICICISession:
         self.timeout = timeout
         self.steps: list[dict] = []
     def send(self, action, params=None):
-        if self.steps:
-            time.sleep(self.pause)
-        if params is None:
-            r = self.s.get(URL, timeout=self.timeout)
-        else:
-            r = self.s.post(URL, data=params, timeout=self.timeout, headers={'Referer': URL})
-        r.raise_for_status()
-        if not only_public_url(r.url):
-            raise RuntimeError(f'Unexpected redirect away from public hospital search: {urlparse(r.url).netloc}')
-        body = r.content
-        self.steps.append(Step(action, r.status_code, len(body), r.url,
-                               hashlib.sha256(body).hexdigest()).__dict__)
-        return r.text
+        """Retry bounded transient transport errors; never retry access-denied or malformed data.
+
+        These POSTs perform read-only public-directory form searches. If the
+        source remains unreachable, the caller marks the capture incomplete.
+        """
+        max_attempts = 4
+        for attempt in range(max_attempts):
+            if self.steps or attempt:
+                time.sleep(self.pause if not attempt else min(15, 2 ** (attempt + 1)))
+            try:
+                if params is None:
+                    r = self.s.get(URL, timeout=self.timeout)
+                else:
+                    r = self.s.post(URL, data=params, timeout=self.timeout, headers={'Referer': URL})
+                if r.status_code in (429, 500, 502, 503, 504) and attempt < max_attempts-1:
+                    print(f'ICICI_TRANSIENT_HTTP_RETRY action={action} status={r.status_code} attempt={attempt+1}/{max_attempts}',flush=True)
+                    continue
+                r.raise_for_status()
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+                if attempt == max_attempts-1:
+                    raise
+                print(f'ICICI_TRANSIENT_TRANSPORT_RETRY action={action} error={type(exc).__name__} attempt={attempt+1}/{max_attempts}',flush=True)
+                continue
+            if not only_public_url(r.url):
+                raise RuntimeError(f'Unexpected redirect away from public hospital search: {urlparse(r.url).netloc}')
+            body = r.content
+            self.steps.append(Step(action, r.status_code, len(body), r.url,
+                                   hashlib.sha256(body).hexdigest()).__dict__)
+            return r.text
+        raise RuntimeError('Unexpected exhausted ICICI request attempts')
     @staticmethod
     def payload(state='', city='', button='', area=''):
         return {'State': state, 'City': city, 'Area': area, 'Hospital_type': '',
